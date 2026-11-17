@@ -1,0 +1,599 @@
+"""
+API views for SERTOS Emergencies application.
+
+Implements:
+1. EmergencyIncidentListCreateView:
+   - POST /api/emergencies/ : Driver-reported emergency incident creation with nested patient.
+   - GET  /api/emergencies/ : Scoped incident listing (driver gets own, admin gets all).
+2. EmergencyIncidentDetailView:
+   - GET  /api/emergencies/<uuid:pk>/ : Scoped incident details inspection.
+3. EmergencyIncidentStatusUpdateView:
+   - PATCH /api/emergencies/<uuid:pk>/status/ : Status lifecycle transition for reporting driver.
+"""
+
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.views import APIView
+
+from apps.accounts.models import UserRole
+from apps.accounts.views import standard_response
+from .models import EmergencyIncident, HospitalStaff, Notification
+from .permissions import (
+    EmergencyIncidentLocationPermission,
+    EmergencyIncidentPermission,
+    EmergencyIncidentRoutePermission,
+    IsHospitalStaffDashboardPermission,
+    IsPoliceDispatcherDashboardPermission,
+    IsVerifiedUserPermission,
+)
+from .routes_service import RouteServiceError, get_incident_route_and_eta
+from .serializers import (
+    AmbulanceLocationCreateSerializer,
+    AmbulanceLocationSerializer,
+    EmergencyIncidentCreateSerializer,
+    EmergencyIncidentDetailSerializer,
+    EmergencyIncidentListSerializer,
+    EmergencyIncidentRouteSerializer,
+    EmergencyIncidentStatusUpdateSerializer,
+    HospitalIncidentDetailSerializer,
+    HospitalIncidentListSerializer,
+    NotificationSerializer,
+    PoliceIncidentDetailSerializer,
+    PoliceIncidentListSerializer,
+)
+from .services import update_emergency_status
+
+
+class EmergencyIncidentListCreateView(APIView):
+    """
+    POST /api/emergencies/
+      - Creates a new emergency incident and nested patient.
+      - Restricted to verified, active ambulance drivers.
+
+    GET /api/emergencies/
+      - Lists emergency incidents.
+      - Ambulance drivers see only their own reported incidents.
+      - System administrators see all incidents.
+      - Other roles (hospital, police) are denied access (403).
+    """
+
+    permission_classes = [EmergencyIncidentPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        base_qs = EmergencyIncident.objects.select_related(
+            "hospital", "ambulance", "reporting_driver"
+        ).prefetch_related("patients")
+
+        if getattr(user, "role", None) == UserRole.ADMIN or user.is_superuser:
+            return base_qs.all()
+
+        if getattr(user, "role", None) == UserRole.AMBULANCE_DRIVER:
+            return base_qs.filter(reporting_driver=user)
+
+        return base_qs.none()
+
+    def post(self, request):
+        serializer = EmergencyIncidentCreateSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        incident = serializer.save()
+
+        detail_serializer = EmergencyIncidentDetailSerializer(incident)
+        return standard_response(
+            data=detail_serializer.data,
+            message="Emergency incident reported successfully.",
+            status_code=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request):
+        incidents = self.get_queryset()
+        serializer = EmergencyIncidentListSerializer(incidents, many=True)
+        return standard_response(
+            data=serializer.data,
+            message="Emergency incidents retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class EmergencyIncidentDetailView(APIView):
+    """
+    GET /api/emergencies/<uuid:pk>/
+      - Retrieves full operational details of an emergency incident.
+      - Ambulance drivers can only retrieve their own reported incidents (404 for others).
+      - System administrators can retrieve any incident.
+      - Other roles are denied access (403).
+    """
+
+    permission_classes = [EmergencyIncidentPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        base_qs = EmergencyIncident.objects.select_related(
+            "hospital", "ambulance", "reporting_driver"
+        ).prefetch_related("patients")
+
+        if getattr(user, "role", None) == UserRole.ADMIN or user.is_superuser:
+            return base_qs.all()
+
+        if getattr(user, "role", None) == UserRole.AMBULANCE_DRIVER:
+            return base_qs.filter(reporting_driver=user)
+
+        return base_qs.none()
+
+    def get(self, request, pk):
+        incident = get_object_or_404(self.get_queryset(), pk=pk)
+        self.check_object_permissions(request, incident)
+        serializer = EmergencyIncidentDetailSerializer(incident)
+        return standard_response(
+            data=serializer.data,
+            message="Emergency incident retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class EmergencyIncidentStatusUpdateView(APIView):
+    """
+    PATCH /api/emergencies/<uuid:pk>/status/
+      - Updates operational lifecycle status of an emergency incident.
+      - Restricted strictly to the reporting ambulance driver.
+      - Admin users cannot transition status in this task (403).
+      - Hospital staff and police dispatchers cannot transition status (403).
+      - Other drivers querying this incident receive 404 (scoped queryset).
+      - Invalid transitions or terminal-state modifications return HTTP 400.
+    """
+
+    permission_classes = [EmergencyIncidentPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        if getattr(user, "role", None) == UserRole.AMBULANCE_DRIVER:
+            return EmergencyIncident.objects.filter(reporting_driver=user)
+        return EmergencyIncident.objects.none()
+
+    def patch(self, request, pk):
+        incident = get_object_or_404(self.get_queryset(), pk=pk)
+        self.check_object_permissions(request, incident)
+
+        serializer = EmergencyIncidentStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_status = serializer.validated_data["status"]
+
+        updated_incident = update_emergency_status(
+            incident=incident,
+            new_status=new_status,
+            user=request.user,
+        )
+
+        detail_serializer = EmergencyIncidentDetailSerializer(updated_incident)
+        return standard_response(
+            data=detail_serializer.data,
+            message="Emergency incident status updated successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class HospitalIncidentListView(APIView):
+    """
+    GET /api/hospital/incidents/
+      - Lists emergency incidents assigned strictly to the authenticated hospital staff's associated hospital(s).
+      - Supports optional query parameter filters: ?status=... and ?severity=...
+      - Restricted to verified, active HOSPITAL_STAFF personnel (403 for other roles).
+    """
+
+    permission_classes = [IsHospitalStaffDashboardPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        hospital_ids = HospitalStaff.objects.filter(
+            user=user,
+            is_active=True,
+            hospital__is_active=True,
+        ).values_list("hospital_id", flat=True)
+
+        qs = EmergencyIncident.objects.filter(hospital_id__in=hospital_ids)
+        qs = qs.select_related("hospital", "ambulance", "reporting_driver").prefetch_related("patients")
+
+        status_param = self.request.query_params.get("status")
+        severity_param = self.request.query_params.get("severity")
+
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+        if severity_param:
+            qs = qs.filter(severity=severity_param.upper())
+
+        return qs.order_by("-created_at")
+
+    def get(self, request):
+        incidents = self.get_queryset()
+        serializer = HospitalIncidentListSerializer(incidents, many=True)
+        return standard_response(
+            data=serializer.data,
+            message="Hospital emergency incidents retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class HospitalIncidentDetailView(APIView):
+    """
+    GET /api/hospital/incidents/<uuid:pk>/
+      - Retrieves full operational details of an incident assigned to the staff member's associated hospital.
+      - Returns nested patient clinical triage data including medical notes.
+      - Returns 404 Not Found if incident belongs to another hospital or does not exist.
+      - Restricted to verified, active HOSPITAL_STAFF personnel.
+    """
+
+    permission_classes = [IsHospitalStaffDashboardPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        hospital_ids = HospitalStaff.objects.filter(
+            user=user,
+            is_active=True,
+            hospital__is_active=True,
+        ).values_list("hospital_id", flat=True)
+
+        qs = EmergencyIncident.objects.filter(hospital_id__in=hospital_ids)
+        return qs.select_related("hospital", "ambulance", "reporting_driver").prefetch_related("patients")
+
+    def get(self, request, pk):
+        incident = get_object_or_404(self.get_queryset(), pk=pk)
+        serializer = HospitalIncidentDetailSerializer(incident)
+        return standard_response(
+            data=serializer.data,
+            message="Hospital emergency incident retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class PoliceIncidentListView(APIView):
+    """
+    GET /api/police/incidents/
+      - City-wide listing of emergency incidents across all hospitals for traffic clearance and dispatch coordination.
+      - Supports optional query parameter filters: ?status=... and ?severity=...
+      - Restricted to verified, active POLICE_DISPATCHER personnel (403 for other roles).
+    """
+
+    permission_classes = [IsPoliceDispatcherDashboardPermission]
+
+    def get_queryset(self):
+        qs = EmergencyIncident.objects.all()
+        qs = qs.select_related("hospital", "ambulance", "reporting_driver").prefetch_related("patients")
+
+        status_param = self.request.query_params.get("status")
+        severity_param = self.request.query_params.get("severity")
+
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+        if severity_param:
+            qs = qs.filter(severity=severity_param.upper())
+
+        return qs.order_by("-created_at")
+
+    def get(self, request):
+        incidents = self.get_queryset()
+        serializer = PoliceIncidentListSerializer(incidents, many=True)
+        return standard_response(
+            data=serializer.data,
+            message="Police emergency incidents retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class PoliceIncidentDetailView(APIView):
+    """
+    GET /api/police/incidents/<uuid:pk>/
+      - Retrieves operational routing and dispatch details for an emergency incident across any hospital.
+      - Includes hospital GPS coordinates, ambulance details, and patient count.
+      - Strictly excludes confidential patient medical notes.
+      - Restricted to verified, active POLICE_DISPATCHER personnel.
+    """
+
+    permission_classes = [IsPoliceDispatcherDashboardPermission]
+
+    def get_queryset(self):
+        return EmergencyIncident.objects.select_related(
+            "hospital", "ambulance", "reporting_driver"
+        ).prefetch_related("patients")
+
+    def get(self, request, pk):
+        incident = get_object_or_404(self.get_queryset(), pk=pk)
+        serializer = PoliceIncidentDetailSerializer(incident)
+        return standard_response(
+            data=serializer.data,
+            message="Police emergency incident retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+def get_scoped_incident(user, pk):
+    """
+    Helper function to scope incident retrieval based on user role:
+    - AMBULANCE_DRIVER: only own reported incidents.
+    - HOSPITAL_STAFF: only incidents directed to their associated active hospital(s).
+    - POLICE_DISPATCHER: all incidents city-wide.
+    - ADMIN / superuser: all incidents.
+    - Out of scope or non-existent: raises Http404.
+    """
+    user_role = getattr(user, "role", None)
+
+    if user_role == UserRole.ADMIN or getattr(user, "is_superuser", False):
+        qs = EmergencyIncident.objects.all()
+    elif user_role == UserRole.AMBULANCE_DRIVER:
+        qs = EmergencyIncident.objects.filter(
+            Q(reporting_driver=user) | Q(ambulance__assigned_driver=user)
+        ).distinct()
+    elif user_role == UserRole.HOSPITAL_STAFF:
+        hospital_ids = HospitalStaff.objects.filter(
+            user=user,
+            is_active=True,
+            hospital__is_active=True,
+        ).values_list("hospital_id", flat=True)
+        qs = EmergencyIncident.objects.filter(hospital_id__in=hospital_ids)
+    elif user_role == UserRole.POLICE_DISPATCHER:
+        qs = EmergencyIncident.objects.all()
+    else:
+        qs = EmergencyIncident.objects.none()
+
+    qs = qs.select_related("ambulance", "hospital", "reporting_driver")
+    return get_object_or_404(qs, pk=pk)
+
+
+class EmergencyIncidentLocationView(APIView):
+    """
+    POST /api/emergencies/<uuid:pk>/location/
+      - Ingests high-frequency GPS coordinate ping for an active emergency incident.
+      - Restricted strictly to the reporting ambulance driver.
+      - Incident must be active (not CLOSED or CANCELLED).
+
+    GET /api/emergencies/<uuid:pk>/location/
+      - Retrieves the latest GPS coordinate ping for an emergency incident.
+      - Accessible by reporting driver, associated hospital staff, police, and admin.
+      - Out-of-scope incidents return 404 Not Found.
+    """
+
+    permission_classes = [EmergencyIncidentLocationPermission]
+
+    def post(self, request, pk):
+        incident = get_scoped_incident(request.user, pk)
+
+        serializer = AmbulanceLocationCreateSerializer(
+            data=request.data,
+            context={"request": request, "incident": incident},
+        )
+        serializer.is_valid(raise_exception=True)
+        location = serializer.save()
+
+        detail_serializer = AmbulanceLocationSerializer(location)
+        return standard_response(
+            data=detail_serializer.data,
+            message="Ambulance GPS location updated successfully.",
+            status_code=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, pk):
+        incident = get_scoped_incident(request.user, pk)
+        latest_location = incident.locations.order_by("-server_received_at").first()
+
+        if not latest_location:
+            return standard_response(
+                data=None,
+                message="No GPS location recorded for this incident yet.",
+                status_code=status.HTTP_200_OK,
+            )
+
+        serializer = AmbulanceLocationSerializer(latest_location)
+        return standard_response(
+            data=serializer.data,
+            message="Latest ambulance GPS location retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class EmergencyIncidentLocationHistoryView(APIView):
+    """
+    GET /api/emergencies/<uuid:pk>/locations/
+      - Retrieves ordered historical GPS breadcrumbs for an emergency incident.
+      - Supports optional ?limit= query parameter (default 50, maximum 200).
+      - Accessible by reporting driver, associated hospital staff, police, and admin.
+      - Out-of-scope incidents return 404 Not Found.
+    """
+
+    permission_classes = [EmergencyIncidentLocationPermission]
+
+    def get(self, request, pk):
+        incident = get_scoped_incident(request.user, pk)
+
+        try:
+            limit = int(request.query_params.get("limit", 50))
+            limit = max(1, min(limit, 200))
+        except (ValueError, TypeError):
+            limit = 50
+
+        locations = incident.locations.order_by("-server_received_at")[:limit]
+        serializer = AmbulanceLocationSerializer(locations, many=True)
+        return standard_response(
+            data=serializer.data,
+            message="Ambulance location history retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class EmergencyIncidentRouteView(APIView):
+    """
+    GET /api/emergencies/<uuid:pk>/route/
+      - Computes real-time road route, distance, duration, ETA, and polyline
+        between the latest ambulance GPS location and the destination hospital.
+      - Access restricted to verified reporting/assigned driver, destination hospital staff,
+        police dispatchers, and system administrators.
+      - Out-of-scope incidents return 404 Not Found.
+    """
+
+    permission_classes = [EmergencyIncidentRoutePermission]
+
+    def get(self, request, pk):
+        incident = get_scoped_incident(request.user, pk)
+        force_recalculate = request.query_params.get("force", "").lower() in ("true", "1")
+        try:
+            route_data = get_incident_route_and_eta(incident, force_recalculate=force_recalculate)
+        except RouteServiceError as exc:
+            return standard_response(
+                success=False,
+                data={},
+                errors={"detail": [exc.message]},
+                message=exc.message,
+                status_code=exc.status_code,
+            )
+
+        serializer = EmergencyIncidentRouteSerializer(route_data)
+        return standard_response(
+            data=serializer.data,
+            message="Incident route and ETA computed successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+
+class NotificationPagination(PageNumberPagination):
+    """
+    Standard pagination for notification list endpoints.
+    Default page size is 20, configurable up to 100 via ?page_size=.
+    """
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class NotificationListView(APIView):
+    """
+    GET /api/notifications/
+      - Lists in-app notifications for the authenticated, verified user.
+      - Strictly isolated to the recipient's own notifications.
+      - Supports optional ?is_read=true/false filtering.
+      - Uses pagination and returns standard SERTOS response envelope.
+      - Strictly excludes confidential patient medical notes.
+    """
+
+    permission_classes = [IsVerifiedUserPermission]
+
+    def get(self, request):
+        queryset = (
+            Notification.objects.filter(recipient=request.user)
+            .select_related("incident", "event")
+            .order_by("-created_at")
+        )
+
+        is_read_param = request.query_params.get("is_read")
+        if is_read_param is not None:
+            if is_read_param.lower() in ["true", "1"]:
+                queryset = queryset.filter(is_read=True)
+            elif is_read_param.lower() in ["false", "0"]:
+                queryset = queryset.filter(is_read=False)
+
+        paginator = NotificationPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        if page is not None:
+            serializer = NotificationSerializer(page, many=True)
+            return standard_response(
+                data={
+                    "count": paginator.page.paginator.count,
+                    "next": paginator.get_next_link(),
+                    "previous": paginator.get_previous_link(),
+                    "results": serializer.data,
+                },
+                message="Notifications retrieved successfully.",
+                status_code=status.HTTP_200_OK,
+            )
+
+        serializer = NotificationSerializer(queryset, many=True)
+        return standard_response(
+            data={
+                "count": queryset.count(),
+                "next": None,
+                "previous": None,
+                "results": serializer.data,
+            },
+            message="Notifications retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class NotificationDetailView(APIView):
+    """
+    GET /api/notifications/<uuid:pk>/
+      - Retrieves full operational details of a single notification.
+      - Validates that the notification belongs to the authenticated user (404 otherwise).
+      - Strictly excludes confidential patient medical notes.
+    """
+
+    permission_classes = [IsVerifiedUserPermission]
+
+    def get(self, request, pk):
+        notification = get_object_or_404(
+            Notification.objects.select_related("incident", "event"),
+            pk=pk,
+            recipient=request.user,
+        )
+        serializer = NotificationSerializer(notification)
+        return standard_response(
+            data=serializer.data,
+            message="Notification retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class NotificationMarkReadView(APIView):
+    """
+    PATCH /api/notifications/<uuid:pk>/read/
+      - Marks a single notification as read for the authenticated recipient.
+      - Enforces recipient ownership validation before update (404 otherwise).
+      - Returns updated notification in standard SERTOS response envelope.
+    """
+
+    permission_classes = [IsVerifiedUserPermission]
+
+    def patch(self, request, pk):
+        notification = get_object_or_404(
+            Notification.objects.select_related("incident", "event"),
+            pk=pk,
+            recipient=request.user,
+        )
+        notification.mark_as_read()
+        serializer = NotificationSerializer(notification)
+        return standard_response(
+            data=serializer.data,
+            message="Notification marked as read successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class NotificationMarkReadAllView(APIView):
+    """
+    PATCH /api/notifications/read-all/
+      - Marks all unread notifications for the authenticated recipient as read.
+      - Sets read_at timestamp to current server UTC time.
+      - Returns count of updated records in standard SERTOS response envelope.
+    """
+
+    permission_classes = [IsVerifiedUserPermission]
+
+    def patch(self, request):
+        now = timezone.now()
+        updated_count = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False,
+        ).update(is_read=True, read_at=now)
+
+        return standard_response(
+            data={"updated_count": updated_count},
+            message=f"Marked {updated_count} notification(s) as read.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+
