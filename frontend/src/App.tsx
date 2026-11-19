@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Routes, Route, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
   Ambulance,
@@ -16,7 +16,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Siren,
-  Signal,
   UserRound,
   Users,
 } from "lucide-react";
@@ -54,13 +53,14 @@ const demoNotifications: Notification[] = [
   { id: "3", incident_id: "demo", incident_number: "AMB-1041", title: "Junction Cleared", message: "West Junction", is_read: true, created_at: new Date(Date.now() - 300000).toISOString(), read_at: new Date().toISOString() },
 ];
 
-function usePoliceData() {
+function usePoliceData(enabled = true) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     Promise.all([api.getProfile(), api.getIncidents(), api.getNotifications()])
       .then(([nextProfile, nextIncidents, nextNotifications]) => {
@@ -74,7 +74,7 @@ function usePoliceData() {
         setError(reason instanceof ApiError ? reason.message : "Unable to load live SERTOS data.");
       });
     return () => { active = false; };
-  }, []);
+  }, [enabled]);
 
   return {
     profile,
@@ -85,7 +85,8 @@ function usePoliceData() {
 }
 
 function App() {
-  const data = usePoliceData();
+  const location = useLocation();
+  const data = usePoliceData(location.pathname !== "/login");
   return (
     <TrafficPoliceLayout profileName={data.profile ? `${data.profile.username}` : undefined}>
       {data.error && <div className="connection-notice"><CircleAlert size={16} /><span>{data.error}</span><span className="notice-muted">Showing interface preview until a verified police session is available.</span></div>}
@@ -97,9 +98,50 @@ function App() {
         <Route path="/history" element={<HistoryPage incidents={data.incidents} />} />
         <Route path="/notifications" element={<NotificationsPage notifications={data.notifications} />} />
         <Route path="/profile" element={<ProfilePage profile={data.profile} />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<DashboardPage {...data} />} />
       </Routes>
     </TrafficPoliceLayout>
+  );
+}
+
+function LoginPage() {
+  const navigate = useNavigate();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      const result = await api.login(username, password);
+      window.localStorage.setItem("sertos_access_token", result.access);
+      window.localStorage.setItem("sertos_refresh_token", result.refresh);
+      window.location.assign("/");
+    } catch (reason: unknown) {
+      setError(reason instanceof ApiError ? reason.message : "Unable to sign in to SERTOS.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="login-card card">
+      <div className="login-brand"><div className="brand-shield"><ShieldCheck size={24} /></div><div><strong>SERTOS</strong><span>Traffic Operations</span></div></div>
+      <span className="eyebrow">Secure officer access</span>
+      <h1>Sign in to SERTOS</h1>
+      <p>Use your verified police dispatcher account to access live emergency coordination.</p>
+      <form onSubmit={submit}>
+        <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
+        <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+        {error && <div className="form-error"><CircleAlert size={15} />{error}</div>}
+        <button className="button primary full-width" type="submit" disabled={submitting}>{submitting ? "Signing in..." : "Sign in securely"}</button>
+      </form>
+      <button className="text-button" onClick={() => navigate("/")}>Continue to interface preview</button>
+    </section>
   );
 }
 

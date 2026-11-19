@@ -56,7 +56,7 @@ export function TrafficPoliceLayout({ children, profileName = "Constable Raju Ku
             </NavLink>
           ))}
         </nav>
-        <NavLink to="/login" className="nav-item logout"><LogOut size={16} /><span>Logout</span></NavLink>
+        <NavLink to="/login" onClick={() => { window.localStorage.removeItem("sertos_access_token"); window.localStorage.removeItem("sertos_refresh_token"); }} className="nav-item logout"><LogOut size={16} /><span>Logout</span></NavLink>
       </aside>
 
       <main className="main-shell">
