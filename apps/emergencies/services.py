@@ -13,7 +13,9 @@ Implements:
 """
 
 import uuid
+import math
 from decimal import Decimal
+from typing import Any, Dict, List, Optional, Union
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -34,6 +36,7 @@ from .models import (
     Notification,
     Patient,
 )
+from .routes_service import haversine_distance_meters
 
 User = get_user_model()
 
@@ -525,3 +528,120 @@ def record_ambulance_location(
             )
 
     return location
+
+
+def find_nearby_hospitals(
+    latitude: Union[float, Decimal, str, int],
+    longitude: Union[float, Decimal, str, int],
+    query: Optional[str] = None,
+    max_results: int = 3,
+    max_distance_km: Union[float, int] = 30,
+) -> List[Dict[str, Any]]:
+    """
+    Read-only spatial query service to find and rank active destination hospitals
+    by spherical proximity to given coordinates, with optional name filtering.
+
+    Requirements:
+    - Latitude and longitude must be valid floating point coordinates.
+    - Only active hospitals with configured GPS coordinates are evaluated.
+    - Filters candidate facilities using raw distance in meters before rounding.
+    - distance_km is rounded to 2 decimal places in the output.
+    - Results are sorted by distance ascending and capped at max_results.
+    - Operates purely in-memory over Django ORM reads; no external API calls.
+    """
+    # 1. Validate coordinates
+    if latitude is None or longitude is None:
+        raise ValueError("Latitude and longitude coordinates are required.")
+
+    try:
+        lat_float = float(latitude)
+        lon_float = float(longitude)
+    except (ValueError, TypeError):
+        raise ValueError("Invalid latitude or longitude coordinate.")
+
+    if not (-90.0 <= lat_float <= 90.0):
+        raise ValueError("Latitude must be between -90.0 and 90.0 degrees.")
+
+    if not (-180.0 <= lon_float <= 180.0):
+        raise ValueError("Longitude must be between -180.0 and 180.0 degrees.")
+
+    # 2. Validate parameters
+    try:
+        max_dist_km_float = float(max_distance_km)
+    except (ValueError, TypeError):
+        raise ValueError("max_distance_km must be a positive number.")
+
+    if not all(math.isfinite(value) for value in (lat_float, lon_float, max_dist_km_float)):
+        raise ValueError("Coordinates and max_distance_km must be finite numbers.")
+
+    if max_dist_km_float <= 0:
+        raise ValueError("max_distance_km must be a positive number.")
+
+    try:
+        max_results_int = int(max_results)
+    except (ValueError, TypeError):
+        max_results_int = 3
+
+    if max_results_int <= 0:
+        max_results_int = 3
+
+    # 3. Query active hospitals with coordinates
+    qs = Hospital.objects.filter(
+        is_active=True,
+        latitude__isnull=False,
+        longitude__isnull=False,
+    )
+
+    if query is not None:
+        clean_query = str(query).strip()
+        if clean_query:
+            qs = qs.filter(name__icontains=clean_query)
+
+    hospitals = list(
+        qs.only(
+            "id",
+            "name",
+            "hospital_code",
+            "address",
+            "contact_number",
+            "latitude",
+            "longitude",
+            "is_active",
+        )
+    )
+
+    # 4. Compute distance and filter
+    max_distance_meters = max_dist_km_float * 1000.0
+    candidates = []
+
+    for hosp in hospitals:
+        hosp_lat = float(hosp.latitude)
+        hosp_lon = float(hosp.longitude)
+        dist_meters = haversine_distance_meters(lat_float, lon_float, hosp_lat, hosp_lon)
+
+        # Apply max_distance_km filtering using raw distance_meters before rounding
+        if dist_meters > max_distance_meters:
+            continue
+
+        candidates.append({
+            "id": str(hosp.id),
+            "name": hosp.name,
+            "hospital_code": hosp.hospital_code,
+            "address": hosp.address,
+            "contact_number": hosp.contact_number,
+            "latitude": float(hosp.latitude),
+            "longitude": float(hosp.longitude),
+            "distance_km": round(dist_meters / 1000.0, 2),
+            "distance_meters": round(dist_meters, 1),
+            "is_active": hosp.is_active,
+            "_raw_dist_meters": dist_meters,
+        })
+
+    # 5. Sort by nearest distance and limit
+    candidates.sort(key=lambda x: x["_raw_dist_meters"])
+
+    for item in candidates:
+        del item["_raw_dist_meters"]
+
+    return candidates[:max_results_int]
+

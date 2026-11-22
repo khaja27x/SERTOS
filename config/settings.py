@@ -20,14 +20,20 @@ load_dotenv(BASE_DIR / ".env")
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ["SECRET_KEY"]
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if os.getenv("DEBUG", "False").lower() in ("true", "1", "yes"):
+        SECRET_KEY = "django-insecure-dev-fallback-key-do-not-use-in-production"
+    else:
+        raise ValueError("CRITICAL: The SECRET_KEY environment variable is required when DEBUG=False.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+
 # Production security settings
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True").lower() in ("true", "1", "yes")
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
@@ -38,6 +44,11 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Auto-detect hosting environment hostnames (e.g. Render)
+render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+if render_host and render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(render_host)
+
 
 # Application definition
 
@@ -46,6 +57,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.emergencies",
     "apps.traffic",
+    "apps.agent",
 
     # Core Django Applications
     "django.contrib.admin",
@@ -96,17 +108,40 @@ ASGI_APPLICATION = "config.asgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# Supports standard DATABASE_URL (Render, Railway, Neon, Supabase)
+# with transparent fallback to individual DB_* parameters.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ["DB_NAME"],
-        "USER": os.environ["DB_USER"],
-        "PASSWORD": os.environ["DB_PASSWORD"],
-        "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+if DATABASE_URL:
+    from urllib.parse import parse_qs, unquote, urlparse
+    parsed_db_url = urlparse(DATABASE_URL)
+    query_params = parse_qs(parsed_db_url.query)
+    ssl_mode = query_params.get("sslmode", ["require" if not DEBUG else "prefer"])[0]
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": unquote(parsed_db_url.path.lstrip("/")),
+            "USER": unquote(parsed_db_url.username or ""),
+            "PASSWORD": unquote(parsed_db_url.password or ""),
+            "HOST": parsed_db_url.hostname or "127.0.0.1",
+            "PORT": str(parsed_db_url.port or "5432"),
+            "OPTIONS": {
+                "sslmode": ssl_mode,
+            } if ssl_mode and ssl_mode != "disable" else {},
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("DB_NAME", "sertos_db"),
+            "USER": os.environ.get("DB_USER", "postgres"),
+            "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", "127.0.0.1"),
+            "PORT": os.getenv("DB_PORT", "5432"),
+        }
+    }
 
 
 # Password validation
@@ -195,12 +230,19 @@ SIMPLE_JWT = {
 }
 
 
-# CORS Configuration for Web Dashboards (Hospital & Police)
+# CORS Configuration for Web Dashboards & Voice Agent Frontend
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
+
+# Development convenience: allow all local development frontend ports when DEBUG is True
+if DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://localhost:\d+$",
+        r"^http://127\.0\.0\.1:\d+$",
+    ]
 
 # Google Maps Platform Configuration (Routes API v2)
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")

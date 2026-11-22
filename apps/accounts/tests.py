@@ -1507,4 +1507,28 @@ class AccountsEndToEndValidationTestCase(TestCase):
         self.assertIn("timestamp", response.data)
 
 
+class HealthCheckEndpointTests(TestCase):
+    """Verifies production health-check and readiness probes."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_health_check_root_endpoint(self):
+        """GET /health/ returns 200 OK with healthy database status."""
+        response = self.client.get("/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "healthy")
+        self.assertEqual(response.data["database"], "connected")
+        self.assertEqual(response.data["service"], "sertos-backend")
+        self.assertIn("timestamp", response.data)
+
+    def test_health_check_api_endpoint(self):
+        """GET /api/health/ returns 200 OK without requiring authentication."""
+        response = self.client.get("/api/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "healthy")
+        self.assertEqual(response.data["database"], "connected")
+
+
+
 
