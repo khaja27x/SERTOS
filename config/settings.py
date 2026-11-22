@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from .env at project root
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(override=True)
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -119,18 +119,18 @@ if DATABASE_URL:
     ssl_mode = query_params.get("sslmode", ["require" if not DEBUG else "prefer"])[0]
 
     DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": unquote(parsed_db_url.path.lstrip("/")),
-            "USER": unquote(parsed_db_url.username or ""),
-            "PASSWORD": unquote(parsed_db_url.password or ""),
-            "HOST": parsed_db_url.hostname or "127.0.0.1",
-            "PORT": str(parsed_db_url.port or "5432"),
-            "OPTIONS": {
-                "sslmode": ssl_mode,
-            } if ssl_mode and ssl_mode != "disable" else {},
-        }
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'postgres'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT', '5432'),
+        'OPTIONS': {
+            'sslmode': 'require',
+        },
     }
+}
 else:
     DATABASES = {
         "default": {
@@ -252,3 +252,18 @@ GOOGLE_MAPS_ROUTES_ENDPOINT = os.getenv(
 )
 GOOGLE_MAPS_TIMEOUT_SECONDS = float(os.getenv("GOOGLE_MAPS_TIMEOUT_SECONDS", "5.0"))
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "ERROR",
+        },
+    },
+}
