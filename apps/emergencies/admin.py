@@ -14,6 +14,8 @@ from .models import (
     EmergencyIncident,
     Hospital,
     HospitalStaff,
+    HospitalBed,
+    HospitalIncidentResponse,
     Notification,
     Patient,
 )
@@ -41,6 +43,21 @@ class HospitalStaffAdmin(admin.ModelAdmin):
     list_filter = ["is_active", "hospital"]
     search_fields = ["user__username", "user__first_name", "user__last_name", "hospital__name", "hospital__hospital_code"]
     autocomplete_fields = ["hospital", "user"]
+
+
+@admin.register(HospitalBed)
+class HospitalBedAdmin(admin.ModelAdmin):
+    list_display = ["hospital", "bed_number", "category", "status", "patient_label", "updated_at"]
+    list_filter = ["hospital", "category", "status"]
+    search_fields = ["hospital__name", "bed_number", "patient_label"]
+
+
+@admin.register(HospitalIncidentResponse)
+class HospitalIncidentResponseAdmin(admin.ModelAdmin):
+    list_display = ["incident", "hospital", "decision", "responded_by", "created_at"]
+    list_filter = ["hospital", "decision"]
+    search_fields = ["incident__incident_number", "reason"]
+    readonly_fields = ["created_at", "updated_at"]
 
 
 @admin.register(Ambulance)

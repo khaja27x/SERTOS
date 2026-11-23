@@ -420,6 +420,18 @@ class EmergencyIncidentRouteAPITestCase(TestCase):
             latitude=Decimal("12.935200"),
             longitude=Decimal("77.624500"),
         )
+        now = timezone.now()
+        self.older_location = AmbulanceLocation.objects.get(
+            incident=self.incident,
+            latitude=Decimal("12.920000"),
+            longitude=Decimal("77.610000"),
+        )
+        AmbulanceLocation.objects.filter(pk=self.older_location.pk).update(
+            server_received_at=now - timedelta(seconds=1)
+        )
+        AmbulanceLocation.objects.filter(pk=self.latest_location.pk).update(
+            server_received_at=now
+        )
 
         self.mock_route_metrics = {
             "distance_meters": 7450,

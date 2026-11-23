@@ -18,11 +18,19 @@ from .views import (
     EmergencyIncidentLocationView,
     EmergencyIncidentRouteView,
     EmergencyIncidentStatusUpdateView,
+    HospitalListView,
+    HospitalBedListView,
+    HospitalBedDetailView,
+    HospitalIncidentDecisionView,
 )
 
 app_name = "emergencies"
 
 urlpatterns = [
+    path("hospitals/", HospitalListView.as_view(), name="hospital_list"),
+    path("hospital-beds/", HospitalBedListView.as_view(), name="hospital_bed_list"),
+    path("hospital-beds/<uuid:pk>/", HospitalBedDetailView.as_view(), name="hospital_bed_detail"),
+    path("hospital/incidents/<uuid:pk>/decision/", HospitalIncidentDecisionView.as_view(), name="hospital_incident_decision"),
     path("", EmergencyIncidentListCreateView.as_view(), name="incident_list_create"),
     path("<uuid:pk>/", EmergencyIncidentDetailView.as_view(), name="incident_detail"),
     path("<uuid:pk>/status/", EmergencyIncidentStatusUpdateView.as_view(), name="incident_status_update"),

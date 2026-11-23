@@ -54,5 +54,8 @@ secrets/
 frontend/node_modules/
 frontend/dist/
 
+# Generated Django SPA template
+templates/index.html
+
 # Scratch & Temporary Dev Scripts
 scratch/

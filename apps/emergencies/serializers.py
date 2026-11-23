@@ -23,6 +23,8 @@ from .models import (
     EmergencyIncident,
     Gender,
     Hospital,
+    HospitalBed,
+    HospitalIncidentResponse,
     IncidentSeverity,
     IncidentStatus,
     Notification,
@@ -75,6 +77,20 @@ class HospitalSummarySerializer(serializers.ModelSerializer):
             "longitude",
             "is_active",
         ]
+
+
+class HospitalBedSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HospitalBed
+        fields = ["id", "hospital", "bed_number", "category", "status", "patient_label", "updated_at"]
+        read_only_fields = ["id", "hospital", "updated_at"]
+
+
+class HospitalIncidentResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HospitalIncidentResponse
+        fields = ["id", "incident", "hospital", "decision", "reason", "responded_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "incident", "hospital", "responded_by", "created_at", "updated_at"]
 
 
 class AmbulanceSummarySerializer(serializers.ModelSerializer):

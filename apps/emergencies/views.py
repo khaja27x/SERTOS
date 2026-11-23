@@ -20,12 +20,20 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import UserRole
 from apps.accounts.views import standard_response
-from .models import EmergencyIncident, HospitalStaff, Notification
+from .models import (
+    EmergencyIncident,
+    Hospital,
+    HospitalBed,
+    HospitalIncidentResponse,
+    HospitalStaff,
+    Notification,
+)
 from .permissions import (
     EmergencyIncidentLocationPermission,
     EmergencyIncidentPermission,
     EmergencyIncidentRoutePermission,
     IsHospitalStaffDashboardPermission,
+    HospitalOperationsPermission,
     IsPoliceDispatcherDashboardPermission,
     IsVerifiedUserPermission,
 )
@@ -42,9 +50,104 @@ from .serializers import (
     HospitalIncidentListSerializer,
     NotificationSerializer,
     PoliceIncidentDetailSerializer,
+    HospitalSummarySerializer,
+    HospitalBedSerializer,
+    HospitalIncidentResponseSerializer,
     PoliceIncidentListSerializer,
 )
 from .services import update_emergency_status
+
+
+class HospitalListView(APIView):
+    """GET /api/hospitals/ - Lists active hospitals available for dispatch."""
+
+    permission_classes = [IsVerifiedUserPermission]
+
+    def get(self, request):
+        hospitals = Hospital.objects.filter(is_active=True).order_by("name")
+        return standard_response(
+            data=HospitalSummarySerializer(hospitals, many=True).data,
+            message="Active hospitals retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class HospitalBedListView(APIView):
+    permission_classes = [HospitalOperationsPermission]
+
+    def get_hospital(self, request):
+        return Hospital.objects.filter(
+            hospital_affiliations__user=request.user,
+            hospital_affiliations__is_active=True,
+            is_active=True,
+        ).first()
+
+    def get(self, request):
+        hospital = self.get_hospital(request)
+        if not hospital:
+            return standard_response(data=[], message="No active hospital assignment.", status_code=status.HTTP_200_OK)
+        return standard_response(
+            data=HospitalBedSerializer(HospitalBed.objects.filter(hospital=hospital), many=True).data,
+            message="Hospital beds retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class HospitalBedDetailView(HospitalBedListView):
+    def patch(self, request, pk):
+        hospital = self.get_hospital(request)
+        bed = get_object_or_404(HospitalBed, pk=pk, hospital=hospital)
+        serializer = HospitalBedSerializer(bed, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return standard_response(
+            data=serializer.data,
+            message="Hospital bed updated successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class HospitalIncidentDecisionView(APIView):
+    permission_classes = [HospitalOperationsPermission]
+
+    def patch(self, request, pk):
+        incident = get_object_or_404(
+            EmergencyIncident.objects.select_related("hospital"),
+            pk=pk,
+            hospital__hospital_affiliations__user=request.user,
+            hospital__hospital_affiliations__is_active=True,
+        )
+        decision = request.data.get("decision")
+        if decision not in HospitalIncidentResponse.Decision.values:
+            return standard_response(
+                success=False,
+                data={},
+                errors={"decision": ["Decision must be ACCEPTED or REJECTED."]},
+                message="Invalid hospital decision.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if decision == HospitalIncidentResponse.Decision.REJECTED and not str(request.data.get("reason", "")).strip():
+            return standard_response(
+                success=False,
+                data={},
+                errors={"reason": ["A rejection reason is required."]},
+                message="Rejection reason is required.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        response, _ = HospitalIncidentResponse.objects.update_or_create(
+            incident=incident,
+            defaults={
+                "hospital": incident.hospital,
+                "responded_by": request.user,
+                "decision": decision,
+                "reason": str(request.data.get("reason", "")).strip(),
+            },
+        )
+        return standard_response(
+            data=HospitalIncidentResponseSerializer(response).data,
+            message="Hospital incident decision saved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
 
 
 class EmergencyIncidentListCreateView(APIView):
@@ -378,7 +481,7 @@ class EmergencyIncidentLocationView(APIView):
 
     def get(self, request, pk):
         incident = get_scoped_incident(request.user, pk)
-        latest_location = incident.locations.order_by("-server_received_at").first()
+        latest_location = incident.locations.order_by("-recorded_at", "-server_received_at", "-id").first()
 
         if not latest_location:
             return standard_response(

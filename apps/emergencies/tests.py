@@ -8,6 +8,7 @@ Covers:
 """
 
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -2055,11 +2056,17 @@ class AmbulanceLocationModelTest(TestCase):
             latitude=Decimal("12.972001"),
             longitude=Decimal("77.595001"),
         )
+        AmbulanceLocation.objects.filter(pk=loc1.pk).update(
+            server_received_at=timezone.now()
+        )
         loc2 = AmbulanceLocation.objects.create(
             ambulance=self.ambulance,
             incident=self.incident,
             latitude=Decimal("12.972002"),
             longitude=Decimal("77.595002"),
+        )
+        AmbulanceLocation.objects.filter(pk=loc2.pk).update(
+            server_received_at=timezone.now() + timedelta(seconds=1)
         )
         locs = list(self.incident.locations.all())
         self.assertEqual(locs[0].id, loc2.id)
@@ -2498,12 +2505,15 @@ class AmbulanceLocationAPITest(TestCase):
         """GPS-10: Location history returns ordered breadcrumbs and respects ?limit= parameter."""
         # Create 5 pings
         for i in range(5):
-            AmbulanceLocation.objects.create(
+            ping = AmbulanceLocation.objects.create(
                 ambulance=self.amb_1,
                 incident=self.incident_active,
                 latitude=Decimal(f"12.97{i:04d}"),
                 longitude=Decimal(f"77.59{i:04d}"),
                 accuracy=float(i + 1),
+            )
+            AmbulanceLocation.objects.filter(pk=ping.pk).update(
+                server_received_at=timezone.now() + timedelta(seconds=i)
             )
 
         self.client.force_authenticate(user=self.staff_a)

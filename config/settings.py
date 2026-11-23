@@ -90,7 +90,7 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [BASE_DIR / "templates", BASE_DIR / "staticfiles" / "frontend"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -111,8 +111,16 @@ ASGI_APPLICATION = "config.asgi.application"
 # Supports standard DATABASE_URL (Render, Railway, Neon, Supabase)
 # with transparent fallback to individual DB_* parameters.
 DATABASE_URL = os.getenv("DATABASE_URL")
+DB_ENGINE = os.getenv("DB_ENGINE", "").lower()
 
-if DATABASE_URL:
+if DB_ENGINE in ("sqlite", "sqlite3"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / os.getenv("SQLITE_DB_NAME", "db.sqlite3"),
+        }
+    }
+elif DATABASE_URL:
     from urllib.parse import parse_qs, unquote, urlparse
     parsed_db_url = urlparse(DATABASE_URL)
     query_params = parse_qs(parsed_db_url.query)
@@ -184,6 +192,7 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "frontend" / "dist"] if (BASE_DIR / "frontend" / "dist").exists() else []
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",

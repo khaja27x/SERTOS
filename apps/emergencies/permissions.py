@@ -93,6 +93,21 @@ class IsHospitalStaffDashboardPermission(BasePermission):
         return True
 
 
+class HospitalOperationsPermission(BasePermission):
+    """Verified hospital staff may read and update their own operational records."""
+
+    message = "Access denied: Hospital Emergency Staff credentials required."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated and user.is_active and getattr(user, "is_verified", False)):
+            self.message = "Access denied: Account is not verified or is inactive."
+            return False
+        if getattr(user, "role", None) != UserRole.HOSPITAL_STAFF:
+            return False
+        return request.method in ["GET", "PATCH", "HEAD", "OPTIONS"]
+
+
 class IsPoliceDispatcherDashboardPermission(BasePermission):
     """
     Permission policy for Police Traffic Dashboard endpoints (/api/police/incidents/):

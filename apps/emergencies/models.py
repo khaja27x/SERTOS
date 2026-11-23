@@ -512,6 +512,53 @@ class EmergencyIncident(models.Model):
         super().save(*args, **kwargs)
 
 
+class HospitalBed(models.Model):
+    class Category(models.TextChoices):
+        GENERAL = "GENERAL", "General"
+        ICU = "ICU", "ICU"
+        EMERGENCY = "EMERGENCY", "Emergency"
+
+    class Status(models.TextChoices):
+        AVAILABLE = "AVAILABLE", "Available"
+        OCCUPIED = "OCCUPIED", "Occupied"
+        RESERVED = "RESERVED", "Reserved"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    hospital = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="beds")
+    bed_number = models.CharField(max_length=30)
+    category = models.CharField(max_length=20, choices=Category.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.AVAILABLE)
+    patient_label = models.CharField(max_length=150, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "emergencies_hospital_bed"
+        ordering = ["bed_number"]
+        constraints = [
+            models.UniqueConstraint(fields=["hospital", "bed_number"], name="unique_hospital_bed_number"),
+        ]
+
+
+class HospitalIncidentResponse(models.Model):
+    class Decision(models.TextChoices):
+        ACCEPTED = "ACCEPTED", "Accepted"
+        REJECTED = "REJECTED", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    incident = models.OneToOneField(
+        EmergencyIncident, on_delete=models.CASCADE, related_name="hospital_response"
+    )
+    hospital = models.ForeignKey(Hospital, on_delete=models.PROTECT, related_name="incident_responses")
+    responded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    reason = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "emergencies_hospital_incident_response"
+
+
 class Gender(models.TextChoices):
     """Controlled gender choices for emergency patient triage."""
     MALE = "MALE", "Male"
@@ -685,6 +732,11 @@ class AmbulanceLocation(models.Model):
 
     def __str__(self) -> str:
         return f"{self.ambulance.vehicle_number} @ ({self.latitude}, {self.longitude}) [{self.server_received_at}]"
+
+    def save(self, *args, **kwargs):
+        if self.recorded_at is None:
+            self.recorded_at = timezone.now()
+        super().save(*args, **kwargs)
 
     def clean(self):
         super().clean()
