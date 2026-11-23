@@ -108,7 +108,7 @@ export default function LoginPage() {
                             <div className="flex items-center rounded-xl border border-slate-600 bg-[#142238] px-4 transition focus-within:border-emerald-400">
                                 <input
                                     id="email"
-                                    type="email"
+                                    type="text"
                                     autoComplete="username"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}

@@ -47,7 +47,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        # Authenticate user credentials using Django's standard mechanism
+        identifier = str(attrs.get("username", "")).strip()
+        if identifier and "@" in identifier:
+            matching_user = User.objects.filter(email__iexact=identifier).first()
+            if matching_user:
+                attrs = attrs.copy()
+                attrs["username"] = matching_user.username
+
         data = super().validate(attrs)
 
         # Check account verification status

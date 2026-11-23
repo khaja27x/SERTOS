@@ -10,13 +10,13 @@ import App from './App.tsx'
 const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 
 if (!apiKey) {
-  throw new Error('Google Maps API key is missing in .env')
+  console.warn('Google Maps API key is missing. Map features will show setup guidance.')
+} else {
+  setOptions({
+    key: apiKey,
+    v: 'weekly',
+  })
 }
-
-setOptions({
-  key: apiKey,
-  v: 'weekly',
-})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
