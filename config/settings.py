@@ -252,6 +252,10 @@ if DEBUG:
         r"^http://localhost:\d+$",
         r"^http://127\.0\.0\.1:\d+$",
     ]
+else:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https://[a-z0-9-]+\.vercel\.app$",
+    ]
 
 # Google Maps Platform Configuration (Routes API v2)
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
