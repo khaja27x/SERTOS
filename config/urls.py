@@ -16,8 +16,8 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
-from django.views.generic import TemplateView
 from config.views import HealthCheckView
+from config.views import frontend_view
 
 urlpatterns = [
     path('health/', HealthCheckView.as_view(), name='health_root'),
@@ -30,6 +30,6 @@ urlpatterns = [
     path('api/notifications/', include('apps.emergencies.notification_urls')),
     path('api/traffic/', include('apps.traffic.urls')),
     path('api/agent/', include('apps.agent.urls')),
-    path('', TemplateView.as_view(template_name='index.html'), name='frontend'),
-    path('<path:path>', TemplateView.as_view(template_name='index.html'), name='frontend_spa'),
+    path('', frontend_view, name='frontend'),
+    path('<path:path>', frontend_view, name='frontend_spa'),
 ]

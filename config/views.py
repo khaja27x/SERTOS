@@ -5,6 +5,8 @@ Production health check and readiness probe views for SERTOS backend.
 from django.conf import settings
 from django.db import connection
 from django.utils import timezone
+from django.http import HttpResponse
+from pathlib import Path
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -50,3 +52,23 @@ class HealthCheckView(APIView):
             "timestamp": timezone.now().isoformat(),
         }
         return Response(payload, status=response_status)
+
+
+def frontend_view(request, path=""):
+    """Serve the generated React entry point for root and client-side routes."""
+    candidates = (
+        settings.BASE_DIR / "templates" / "index.html",
+        settings.BASE_DIR / "frontend" / "dist" / "index.html",
+        settings.STATIC_ROOT / "frontend" / "index.html",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return HttpResponse(
+                candidate.read_text(encoding="utf-8"),
+                content_type="text/html",
+            )
+    return HttpResponse(
+        "Frontend build is missing. Run npm run build --prefix frontend.",
+        status=503,
+        content_type="text/plain",
+    )
