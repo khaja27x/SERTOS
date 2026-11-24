@@ -7,11 +7,16 @@ Routes:
 """
 
 from django.urls import path
-from .views import PoliceIncidentDetailView, PoliceIncidentListView
+from .views import (
+    PoliceIncidentAcknowledgementView,
+    PoliceIncidentDetailView,
+    PoliceIncidentListView,
+)
 
 app_name = "police"
 
 urlpatterns = [
     path("incidents/", PoliceIncidentListView.as_view(), name="incident_list"),
     path("incidents/<uuid:pk>/", PoliceIncidentDetailView.as_view(), name="incident_detail"),
+    path("incidents/<uuid:pk>/acknowledge/", PoliceIncidentAcknowledgementView.as_view(), name="incident_acknowledge"),
 ]

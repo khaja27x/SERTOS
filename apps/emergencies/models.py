@@ -559,6 +559,20 @@ class HospitalIncidentResponse(models.Model):
         db_table = "emergencies_hospital_incident_response"
 
 
+class PoliceIncidentAcknowledgement(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    incident = models.OneToOneField(
+        EmergencyIncident,
+        on_delete=models.CASCADE,
+        related_name="police_acknowledgement",
+    )
+    acknowledged_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    acknowledged_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "emergencies_police_incident_acknowledgement"
+
+
 class Gender(models.TextChoices):
     """Controlled gender choices for emergency patient triage."""
     MALE = "MALE", "Male"

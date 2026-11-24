@@ -16,6 +16,7 @@ from .models import (
     HospitalStaff,
     HospitalBed,
     HospitalIncidentResponse,
+    PoliceIncidentAcknowledgement,
     Notification,
     Patient,
 )

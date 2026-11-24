@@ -168,12 +168,20 @@ class UserProfileSerializer(serializers.ModelSerializer):
     - Never exposes password hashes or credentials.
     """
 
+    def validate_age(self, value):
+        if value is not None and (value < 18 or value > 100):
+            raise serializers.ValidationError("Age must be between 18 and 100.")
+        return value
+
     class Meta:
         model = User
         fields = (
             "id",
             "username",
             "email",
+            "first_name",
+            "last_name",
+            "age",
             "role",
             "phone_number",
             "badge_or_employee_id",

@@ -45,6 +45,11 @@ class User(AbstractUser):
         blank=True,
         help_text="Official institutional identification (e.g. Police Badge, Hospital ID, Ambulance Fleet License).",
     )
+    age = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Driver age in years.",
+    )
     is_verified = models.BooleanField(
         default=True,
         help_text="Designates whether this official personnel account has been verified by an administrator.",

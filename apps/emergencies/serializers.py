@@ -278,6 +278,8 @@ class HospitalIncidentListSerializer(serializers.ModelSerializer):
     patient_count = serializers.IntegerField(source="patients.count", read_only=True)
     severity_display = serializers.CharField(source="get_severity_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    hospital_decision = serializers.SerializerMethodField()
+    police_acknowledged = serializers.SerializerMethodField()
 
     class Meta:
         model = EmergencyIncident
@@ -301,7 +303,16 @@ class HospitalIncidentListSerializer(serializers.ModelSerializer):
             "cancelled_at",
             "created_at",
             "updated_at",
+            "hospital_decision",
+            "police_acknowledged",
         ]
+
+    def get_hospital_decision(self, obj):
+        response = getattr(obj, "hospital_response", None)
+        return response.decision if response else None
+
+    def get_police_acknowledged(self, obj):
+        return hasattr(obj, "police_acknowledgement")
 
 
 class HospitalIncidentRouteSummarySerializer(serializers.Serializer):
@@ -401,6 +412,8 @@ class PoliceIncidentListSerializer(serializers.ModelSerializer):
     patient_count = serializers.IntegerField(source="patients.count", read_only=True)
     severity_display = serializers.CharField(source="get_severity_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    hospital_decision = serializers.SerializerMethodField()
+    police_acknowledged = serializers.SerializerMethodField()
 
     class Meta:
         model = EmergencyIncident
@@ -422,7 +435,16 @@ class PoliceIncidentListSerializer(serializers.ModelSerializer):
             "cancelled_at",
             "created_at",
             "updated_at",
+            "hospital_decision",
+            "police_acknowledged",
         ]
+
+    def get_hospital_decision(self, obj):
+        response = getattr(obj, "hospital_response", None)
+        return response.decision if response else None
+
+    def get_police_acknowledged(self, obj):
+        return hasattr(obj, "police_acknowledgement")
 
 
 class PoliceIncidentDetailSerializer(serializers.ModelSerializer):

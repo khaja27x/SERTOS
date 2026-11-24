@@ -1,18 +1,19 @@
 # SERTOS Frontend
 
-React and TypeScript frontend for the SERTOS emergency response system.
+This is the frontend copy served or built from inside `backend/`.
 
-## Development
+For the primary workspace setup, use the top-level `frontend/` directory.
 
 ```powershell
+cd backend\frontend
+Copy-Item .env.example .env
 npm install
-npm run dev
-```
-
-## Production build
-
-```powershell
+npm run dev -- --host 127.0.0.1
 npm run build
 ```
 
-The Django build script copies `dist/index.html` into the backend templates directory and builds static assets for WhiteNoise.
+Local API:
+
+```text
+http://127.0.0.1:8000
+```

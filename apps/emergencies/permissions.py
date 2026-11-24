@@ -82,8 +82,8 @@ class IsHospitalStaffDashboardPermission(BasePermission):
             self.message = "Access denied: Account is not verified or is inactive."
             return False
 
-        if request.method not in ["GET", "HEAD", "OPTIONS"]:
-            self.message = "Access denied: Dashboard endpoints are read-only."
+        if request.method not in ["GET", "POST", "PATCH", "HEAD", "OPTIONS"]:
+            self.message = "Access denied: Unsupported hospital dashboard operation."
             return False
 
         if getattr(user, "role", None) != UserRole.HOSPITAL_STAFF:
@@ -105,7 +105,7 @@ class HospitalOperationsPermission(BasePermission):
             return False
         if getattr(user, "role", None) != UserRole.HOSPITAL_STAFF:
             return False
-        return request.method in ["GET", "PATCH", "HEAD", "OPTIONS"]
+        return request.method in ["GET", "POST", "PATCH", "HEAD", "OPTIONS"]
 
 
 class IsPoliceDispatcherDashboardPermission(BasePermission):
@@ -128,8 +128,8 @@ class IsPoliceDispatcherDashboardPermission(BasePermission):
             self.message = "Access denied: Account is not verified or is inactive."
             return False
 
-        if request.method not in ["GET", "HEAD", "OPTIONS"]:
-            self.message = "Access denied: Dashboard endpoints are read-only."
+        if request.method not in ["GET", "POST", "HEAD", "OPTIONS"]:
+            self.message = "Access denied: Unsupported police dashboard operation."
             return False
 
         if getattr(user, "role", None) != UserRole.POLICE_DISPATCHER:

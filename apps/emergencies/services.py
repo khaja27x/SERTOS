@@ -352,6 +352,19 @@ def update_emergency_status(
 
         old_status = locked_incident.status
 
+        if new_status == IncidentStatus.IN_TRANSIT:
+            hospital_response = getattr(locked_incident, "hospital_response", None)
+            police_acknowledgement = getattr(locked_incident, "police_acknowledgement", None)
+            missing = []
+            if not hospital_response or hospital_response.decision != "ACCEPTED":
+                missing.append("hospital acceptance")
+            if not police_acknowledgement:
+                missing.append("police acknowledgement")
+            if missing:
+                raise serializers.ValidationError(
+                    {"status": [f"Ambulance cannot start transit until: {', '.join(missing)}."]}
+                )
+
         # 4. Apply status change and full_clean
         locked_incident.status = new_status
         try:

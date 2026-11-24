@@ -26,7 +26,9 @@ from .models import (
     HospitalBed,
     HospitalIncidentResponse,
     HospitalStaff,
+    IncidentStatus,
     Notification,
+    PoliceIncidentAcknowledgement,
 )
 from .permissions import (
     EmergencyIncidentLocationPermission,
@@ -77,8 +79,8 @@ class HospitalBedListView(APIView):
 
     def get_hospital(self, request):
         return Hospital.objects.filter(
-            hospital_affiliations__user=request.user,
-            hospital_affiliations__is_active=True,
+            staff_affiliations__user=request.user,
+            staff_affiliations__is_active=True,
             is_active=True,
         ).first()
 
@@ -90,6 +92,50 @@ class HospitalBedListView(APIView):
             data=HospitalBedSerializer(HospitalBed.objects.filter(hospital=hospital), many=True).data,
             message="Hospital beds retrieved successfully.",
             status_code=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        hospital = self.get_hospital(request)
+        if not hospital:
+            return standard_response(
+                success=False,
+                errors={"hospital": ["No active hospital assignment was found."]},
+                message="Cannot add a bed without an active hospital assignment.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        bed_number = str(request.data.get("bed_number", "")).strip()
+        category = str(request.data.get("category", "GENERAL")).upper()
+        patient_label = str(request.data.get("patient_label", "")).strip()
+        status_value = str(request.data.get("status", "AVAILABLE")).upper()
+        if not bed_number:
+            return standard_response(
+                success=False,
+                errors={"bed_number": ["Bed number is required."]},
+                message="Bed creation failed.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if category not in ("GENERAL", "ICU", "EMERGENCY"):
+            category = "GENERAL"
+        if status_value not in ("AVAILABLE", "OCCUPIED", "RESERVED"):
+            status_value = "AVAILABLE"
+        if HospitalBed.objects.filter(hospital=hospital, bed_number=bed_number).exists():
+            return standard_response(
+                success=False,
+                errors={"bed_number": ["A bed with this number already exists at the hospital."]},
+                message="Duplicate bed number.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        bed = HospitalBed.objects.create(
+            hospital=hospital,
+            bed_number=bed_number,
+            category=category,
+            status=status_value,
+            patient_label=patient_label,
+        )
+        return standard_response(
+            data=HospitalBedSerializer(bed).data,
+            message="Hospital bed added successfully.",
+            status_code=status.HTTP_201_CREATED,
         )
 
 
@@ -114,8 +160,8 @@ class HospitalIncidentDecisionView(APIView):
         incident = get_object_or_404(
             EmergencyIncident.objects.select_related("hospital"),
             pk=pk,
-            hospital__hospital_affiliations__user=request.user,
-            hospital__hospital_affiliations__is_active=True,
+            hospital__staff_affiliations__user=request.user,
+            hospital__staff_affiliations__is_active=True,
         )
         decision = request.data.get("decision")
         if decision not in HospitalIncidentResponse.Decision.values:
@@ -143,6 +189,30 @@ class HospitalIncidentDecisionView(APIView):
                 "reason": str(request.data.get("reason", "")).strip(),
             },
         )
+        if decision == "ACCEPTED":
+            available_bed = HospitalBed.objects.filter(
+                hospital=incident.hospital,
+                status=HospitalBed.Status.AVAILABLE,
+            ).first()
+            if not available_bed:
+                response.delete()
+                return standard_response(
+                    success=False,
+                    errors={"bed": ["No available bed is registered for this hospital."]},
+                    message="Accept the case only after reserving an available bed.",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
+            available_bed.status = HospitalBed.Status.RESERVED
+            available_bed.patient_label = incident.patients.first().name if incident.patients.exists() else "Incoming emergency patient"
+            available_bed.save(update_fields=["status", "patient_label", "updated_at"])
+            if incident.status == IncidentStatus.REPORTED:
+                incident.status = IncidentStatus.ASSIGNED
+                incident.save(update_fields=["status", "assigned_at", "updated_at"])
+        else:
+            HospitalBed.objects.filter(
+                hospital=incident.hospital,
+                patient_label__icontains=incident.incident_number,
+            ).update(status=HospitalBed.Status.AVAILABLE, patient_label="")
         return standard_response(
             data=HospitalIncidentResponseSerializer(response).data,
             message="Hospital incident decision saved successfully.",
@@ -321,6 +391,14 @@ class HospitalIncidentListView(APIView):
             status_code=status.HTTP_200_OK,
         )
 
+    def post(self, request):
+        return standard_response(
+            success=False,
+            errors={"detail": ["Hospital dashboard incident listing is read-only."]},
+            message="Hospital dashboard incident listing is read-only.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
 
 class HospitalIncidentDetailView(APIView):
     """
@@ -351,6 +429,14 @@ class HospitalIncidentDetailView(APIView):
             data=serializer.data,
             message="Hospital emergency incident retrieved successfully.",
             status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, pk):
+        return standard_response(
+            success=False,
+            errors={"detail": ["Hospital dashboard incident detail is read-only."]},
+            message="Hospital dashboard incident detail is read-only.",
+            status_code=status.HTTP_403_FORBIDDEN,
         )
 
 
@@ -387,6 +473,14 @@ class PoliceIncidentListView(APIView):
             status_code=status.HTTP_200_OK,
         )
 
+    def post(self, request):
+        return standard_response(
+            success=False,
+            errors={"detail": ["Police dashboard incident listing is read-only."]},
+            message="Police dashboard incident listing is read-only.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
 
 class PoliceIncidentDetailView(APIView):
     """
@@ -410,6 +504,37 @@ class PoliceIncidentDetailView(APIView):
         return standard_response(
             data=serializer.data,
             message="Police emergency incident retrieved successfully.",
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, pk):
+        return standard_response(
+            success=False,
+            errors={"detail": ["Police dashboard incident detail is read-only."]},
+            message="Police dashboard incident detail is read-only.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+
+class PoliceIncidentAcknowledgementView(APIView):
+    permission_classes = [IsPoliceDispatcherDashboardPermission]
+
+    def post(self, request, pk):
+        incident = get_object_or_404(EmergencyIncident, pk=pk)
+        acknowledgement, _ = PoliceIncidentAcknowledgement.objects.update_or_create(
+            incident=incident,
+            defaults={"acknowledged_by": request.user},
+        )
+        if incident.status == IncidentStatus.REPORTED:
+            incident.status = IncidentStatus.ASSIGNED
+            incident.save(update_fields=["status", "assigned_at", "updated_at"])
+        return standard_response(
+            data={
+                "incident_id": str(incident.id),
+                "acknowledged": True,
+                "acknowledged_at": acknowledgement.acknowledged_at.isoformat(),
+            },
+            message="Police acknowledgement recorded successfully.",
             status_code=status.HTTP_200_OK,
         )
 
@@ -481,7 +606,7 @@ class EmergencyIncidentLocationView(APIView):
 
     def get(self, request, pk):
         incident = get_scoped_incident(request.user, pk)
-        latest_location = incident.locations.order_by("-recorded_at", "-server_received_at", "-id").first()
+        latest_location = incident.locations.order_by("-server_received_at", "-id").first()
 
         if not latest_location:
             return standard_response(

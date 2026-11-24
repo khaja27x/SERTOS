@@ -283,6 +283,29 @@ class ProfileView(APIView):
             )
 
         updated_user = serializer.save()
+        ambulance_number = str(request.data.get("badge_or_employee_id", "")).strip()
+        if ambulance_number and getattr(updated_user, "role", None) == "AMBULANCE_DRIVER":
+            from apps.emergencies.models import Ambulance
+
+            ambulance = Ambulance.objects.filter(
+                assigned_driver=updated_user,
+                is_active=True,
+            ).first()
+            if ambulance and ambulance.vehicle_number != ambulance_number:
+                ambulance.vehicle_number = ambulance_number
+                try:
+                    ambulance.save(update_fields=["vehicle_number"])
+                except Exception:
+                    return standard_response(
+                        success=False,
+                        errors={
+                            "badge_or_employee_id": [
+                                "Ambulance registration number is already in use."
+                            ]
+                        },
+                        message="Profile update failed.",
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                    )
         return standard_response(
             data=UserProfileSerializer(updated_user).data,
             message="Profile updated successfully.",
