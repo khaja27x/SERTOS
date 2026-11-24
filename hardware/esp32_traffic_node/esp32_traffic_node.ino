@@ -8,13 +8,7 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-
-// Fill these in locally. Do not commit real credentials or device tokens.
-const char *WIFI_SSID = "YOUR_WIFI_NAME";
-const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char *API_BASE_URL = "https://YOUR-BACKEND.onrender.com";
-const char *DEVICE_ID = "ESP32-SERTOS-01";
-const char *DEVICE_TOKEN = "PASTE_DEVICE_TOKEN_HERE";
+#include "secrets.h"
 
 constexpr uint8_t SENSOR_1_PIN = 25;
 constexpr uint8_t SENSOR_2_PIN = 26;

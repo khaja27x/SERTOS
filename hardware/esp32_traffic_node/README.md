@@ -41,8 +41,8 @@ The common HW-201/MH-B behavior is active-low detection, but module variants exi
 ## Configure and upload
 
 1. Register a device in the deployed backend using an administrator account at `POST /api/traffic/devices/register/`. Use a unique ID such as `ESP32-SERTOS-01`, an intersection label like `SERTOS Bench Prototype`, and valid latitude/longitude. The API returns a raw device token once. Store it privately; it cannot be retrieved later.
-2. In the sketch set `WIFI_SSID`, `WIFI_PASSWORD`, `API_BASE_URL` (the backend's HTTPS origin only, e.g. `https://your-service.onrender.com`), `DEVICE_ID`, and `DEVICE_TOKEN` to the exact registration values.
-3. Do not paste secrets into a committed sketch. Keep your configured copy untracked/private. The firmware currently contains placeholders only.
+2. Copy `secrets.h.example` to `secrets.h` in the same folder, then set `WIFI_SSID`, `WIFI_PASSWORD`, `API_BASE_URL` (the backend's HTTPS origin only, e.g. `https://your-service.onrender.com`), `DEVICE_ID`, and `DEVICE_TOKEN` to your values.
+3. `secrets.h` is excluded from Git. Do not remove that protection or share the file; it contains your Wi-Fi password and device token.
 4. Upload, open Serial Monitor at 115200 baud, and watch for `heartbeat=ok status=ok`. The backend device record's status payload should then contain `sensor_1_detected` and `sensor_2_detected`.
 
 The API device authentication expects `X-Device-ID` and `X-Device-Token`. Heartbeat is posted to `/api/traffic/esp32/heartbeat/`; sensor status is posted to `/api/traffic/esp32/status/` every 30 seconds. The status endpoint only accepts these reports after the backend changes in this checkout have been deployed to the separate backend repository.
