@@ -7,6 +7,7 @@ Django REST API for authentication, emergency incidents, hospitals, police opera
 - Python 3.12 or newer
 - SQLite for local development
 - Optional Google Maps Routes API key
+- ESP32 hardware prototype instructions: `hardware/esp32_traffic_node/README.md`
 
 ## Local setup
 
@@ -36,6 +37,14 @@ GOOGLE_MAPS_API_KEY=
 ```
 
 Never commit real secrets or API keys.
+
+## Deploying frontend and backend separately
+
+The frontend reads `VITE_API_BASE_URL` at build time. Set it in the frontend deployment to the backend HTTPS origin, without `/api` or a trailing path. Since the frontend and backend use separate GitHub repositories, a change in this combined workspace must also be copied/committed to the matching source repository before that service can deploy it.
+
+For a separately hosted browser frontend, set the backend Render environment variable `CORS_ALLOWED_ORIGINS` to a comma-separated list containing the exact frontend origins (for example `https://your-frontend.onrender.com`). Include scheme and hostname only; do not guess this value. Redeploy the backend after changing it. ESP32 device requests use device-token headers and are not subject to browser CORS.
+
+The traffic device endpoints are rooted at `/api/traffic/`. ESP32 devices authenticate with `X-Device-ID` and `X-Device-Token`. Device status reports are stored in `TrafficDevice.last_status_payload`; the two prototype sensor fields are `sensor_1_detected` and `sensor_2_detected`.
 
 ## Tests
 

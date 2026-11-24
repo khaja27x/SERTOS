@@ -119,6 +119,9 @@ class DeviceStatusReportSerializer(serializers.Serializer):
     )
     temperature_celsius = serializers.FloatField(required=False)
     mac_address = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    # Optional local prototype sensors; persisted in TrafficDevice.last_status_payload.
+    sensor_1_detected = serializers.BooleanField(required=False)
+    sensor_2_detected = serializers.BooleanField(required=False)
 
 
 class DeviceConfigSerializer(serializers.Serializer):
