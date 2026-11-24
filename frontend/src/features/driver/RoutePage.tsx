@@ -26,6 +26,7 @@ const DEFAULT_CENTER: Coordinates = {
     lat: 20.5937,
     lng: 78.9629,
 }
+const ambulanceAssetUrl = `${import.meta.env.BASE_URL}ambulance.png`
 
 function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
     const mapElementRef = useRef<HTMLDivElement | null>(null)
@@ -39,12 +40,21 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
         useRef<typeof google.maps.marker.AdvancedMarkerElement | null>(null)
 
     const watchIdRef = useRef<number | null>(null)
+    const incidentIdRef = useRef<string | undefined>(incidentId)
 
     const [position, setPosition] = useState<Coordinates | null>(null)
     const [gpsStatus, setGpsStatus] = useState('Waiting for GPS')
     const [mapStatus, setMapStatus] = useState('Loading Google Maps...')
     const [mapReady, setMapReady] = useState(false)
+    const [mapError, setMapError] = useState(false)
+    const [routeError, setRouteError] = useState('')
     const [route, setRoute] = useState<{ distance_km: number; duration_formatted: string } | null>(null)
+    const lastLocationPostAtRef = useRef(0)
+    const lastRouteFetchAtRef = useRef(0)
+
+    useEffect(() => {
+        incidentIdRef.current = incidentId
+    }, [incidentId])
 
     // =================================
     // INITIALIZE GOOGLE MAP
@@ -90,6 +100,47 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
 
                 mapRef.current = map
 
+                map.addListener("click", (event: google.maps.MapMouseEvent) => {
+                    if (!event.latLng) return
+                    const selected = {
+                        lat: event.latLng.lat(),
+                        lng: event.latLng.lng(),
+                    }
+                    setPosition(selected)
+                    setGpsStatus("Manual GPS coordinate selected")
+
+                    if (incidentIdRef.current) {
+                        api.sendLocation(incidentIdRef.current, selected.lat, selected.lng)
+                            .catch((error: unknown) =>
+                                console.error("Manual GPS update failed:", error),
+                            )
+                    }
+
+                    const MarkerClass = AdvancedMarkerRef.current
+                    if (!MarkerClass) return
+
+                    if (ambulanceMarkerRef.current) {
+                        ambulanceMarkerRef.current.position = selected
+                    } else {
+                        const ambulanceImage = document.createElement("img")
+                        ambulanceImage.src = ambulanceAssetUrl
+                        ambulanceImage.alt = "Ambulance"
+                        ambulanceImage.style.width = "55px"
+                        ambulanceImage.style.height = "55px"
+                        ambulanceImage.style.objectFit = "contain"
+                        ambulanceImage.draggable = false
+
+                        const marker = new MarkerClass({
+                            map,
+                            position: selected,
+                            title: "Ambulance - Selected Location",
+                            zIndex: 1000,
+                        })
+                        marker.append(ambulanceImage)
+                        ambulanceMarkerRef.current = marker
+                    }
+                })
+
                 setMapReady(true)
                 setMapStatus('Google Maps connected')
 
@@ -102,6 +153,7 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
                             ? error.message
                             : 'Unable to load Google Maps'
                     )
+                    setMapError(true)
                 }
             }
         }
@@ -121,14 +173,14 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
     // =================================
 
     useEffect(() => {
-        if (!mapReady || !mapRef.current) return
-
         if (!navigator.geolocation) {
             setGpsStatus('GPS not supported by browser')
             return
         }
 
         setGpsStatus('Requesting GPS permission...')
+        lastLocationPostAtRef.current = 0
+        lastRouteFetchAtRef.current = 0
 
         const watchId = navigator.geolocation.watchPosition(
             (location) => {
@@ -140,51 +192,26 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
                 setPosition(currentPosition)
                 setGpsStatus('GPS connected')
                 if (incidentId) {
-                    api.sendLocation(incidentId, currentPosition.lat, currentPosition.lng)
-                        .catch((error: unknown) => console.error('GPS update failed:', error))
-                    api.getRoute(incidentId)
-                        .then(setRoute)
-                        .catch(() => undefined)
-                }
-
-                const map = mapRef.current
-                const MarkerClass = AdvancedMarkerRef.current
-
-                if (!map || !MarkerClass) return
-
-                // Keep the map centered on the ambulance.
-                map.panTo(currentPosition)
-                map.setZoom(16)
-
-                if (!ambulanceMarkerRef.current) {
-                    // Create ambulance image.
-                    const ambulanceImage = document.createElement('img')
-
-                    ambulanceImage.src = '/ambulance.png'
-                    ambulanceImage.alt = 'Ambulance'
-                    ambulanceImage.style.width = '55px'
-                    ambulanceImage.style.height = '55px'
-                    ambulanceImage.style.objectFit = 'contain'
-                    ambulanceImage.draggable = false
-
-                    // Create modern Advanced Marker.
-                    const marker = new MarkerClass({
-                        map,
-                        position: currentPosition,
-                        title: 'Ambulance - Live Location',
-                        zIndex: 1000,
-                        anchorLeft: '-50%',
-                        anchorTop: '-50%',
-                    })
-
-                    marker.append(ambulanceImage)
-
-                    ambulanceMarkerRef.current = marker
-
-                } else {
-                    // Update existing marker instead of creating
-                    // a new marker for every GPS update.
-                    ambulanceMarkerRef.current.position = currentPosition
+                    const now = Date.now()
+                    if (now - lastLocationPostAtRef.current >= 5_000) {
+                        lastLocationPostAtRef.current = now
+                        api.sendLocation(incidentId, currentPosition.lat, currentPosition.lng)
+                            .catch((error: unknown) => {
+                                console.error('GPS update failed:', error)
+                                setGpsStatus(error instanceof Error ? `GPS upload failed: ${error.message}` : 'GPS upload failed')
+                            })
+                    }
+                    if (now - lastRouteFetchAtRef.current >= 30_000) {
+                        lastRouteFetchAtRef.current = now
+                        api.getRoute(incidentId)
+                            .then((summary) => {
+                                setRoute(summary)
+                                setRouteError('')
+                            })
+                            .catch((error: unknown) => {
+                                setRouteError(error instanceof Error ? error.message : 'Route service unavailable.')
+                            })
+                    }
                 }
             },
 
@@ -215,7 +242,41 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
             navigator.geolocation.clearWatch(watchId)
             watchIdRef.current = null
         }
-    }, [mapReady, incidentId])
+    }, [incidentId])
+
+    // GPS is a backend input; the map is only its visualization. Keep the
+    // controller feed working even if the Maps key or map service is down.
+    useEffect(() => {
+        const map = mapRef.current
+        const MarkerClass = AdvancedMarkerRef.current
+        if (!mapReady || !map || !MarkerClass || !position) return
+
+        map.panTo(position)
+        map.setZoom(16)
+
+        if (!ambulanceMarkerRef.current) {
+            const ambulanceImage = document.createElement('img')
+            ambulanceImage.src = ambulanceAssetUrl
+            ambulanceImage.alt = 'Ambulance'
+            ambulanceImage.style.width = '55px'
+            ambulanceImage.style.height = '55px'
+            ambulanceImage.style.objectFit = 'contain'
+            ambulanceImage.draggable = false
+
+            const marker = new MarkerClass({
+                map,
+                position,
+                title: 'Ambulance location',
+                zIndex: 1000,
+                anchorLeft: '-50%',
+                anchorTop: '-50%',
+            })
+            marker.append(ambulanceImage)
+            ambulanceMarkerRef.current = marker
+        } else {
+            ambulanceMarkerRef.current.position = position
+        }
+    }, [mapReady, position])
 
     // =================================
     // CLEANUP AMBULANCE MARKER
@@ -265,11 +326,11 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
                     </p>
 
                     <h2 className="text-sm font-bold text-[#10264D] truncate mt-0.5">
-                        {route ? 'Emergency destination' : 'Hospital route pending'}
+                        {route ? 'Emergency route' : 'Hospital route pending'}
                     </h2>
 
                     <p className="text-[10px] text-slate-400">
-                        {route ? 'Live route connected' : 'Waiting for GPS location'}
+                        {route ? 'Route updated from backend' : routeError || 'Waiting for route data'}
                     </p>
                 </div>
 
@@ -326,28 +387,26 @@ function RoutePage({ incidentId, onStartNavigation }: RoutePageProps) {
 
                 {/* RECENTER BUTTON */}
 
-                <button
+                {mapReady && <button
                     type="button"
                     onClick={recenterMap}
                     className="absolute bottom-3 right-3 bg-white w-10 h-10 rounded-full shadow-md flex items-center justify-center active:scale-95"
                     aria-label="Center on ambulance location"
                 >
                     <LocateFixed size={20} className="text-blue-600" />
-                </button>
+                </button>}
 
                 {/* LOADING INDICATOR */}
 
                 {!mapReady && (
                     <div className="absolute inset-0 flex items-center justify-center bg-slate-100/90 pointer-events-none">
                         <div className="text-center">
-                            <Loader2
-                                className="animate-spin mx-auto text-blue-600"
-                                size={27}
-                            />
+                            {!mapError && <Loader2 className="animate-spin mx-auto text-blue-600" size={27} />}
 
-                            <p className="text-xs font-semibold text-slate-600 mt-2">
+                            <p className="text-xs font-semibold text-slate-600 mt-2 max-w-xs px-4">
                                 {mapStatus}
                             </p>
+                            {mapError && <p className="mt-1 text-[11px] text-slate-500">GPS tracking continues without the map view. Add a valid Maps API key to show the map.</p>}
                         </div>
                     </div>
                 )}

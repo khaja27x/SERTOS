@@ -190,7 +190,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "frontend" / "dist"] if (BASE_DIR / "frontend" / "dist").exists() else []
 STORAGES = {
@@ -198,7 +198,10 @@ STORAGES = {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        # Vite already content-hashes bundle filenames. Manifest storage would
+        # hash them a second time, while the generated index.html keeps Vite's
+        # original names, causing Django's SPA fallback to return HTML for JS.
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },
 }
 

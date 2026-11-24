@@ -1,6 +1,6 @@
 
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
     ShieldCheck,
     LayoutDashboard,
@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 
 import "./traffic-police.css";
+import { api } from "../../lib/api";
+import { clearSession, getSession } from "../../lib/auth";
 
 interface TrafficPoliceLayoutProps {
     children: ReactNode;
@@ -33,6 +35,33 @@ export default function TrafficPoliceLayout({
     children,
 }: TrafficPoliceLayoutProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [officerName, setOfficerName] = useState(() => getSession()?.user.username || "Signed-in officer");
+    const navigate = useNavigate();
+
+    useEffect(() => {
+        let mounted = true;
+        api.getProfile()
+            .then((profile) => {
+                if (!mounted) return;
+                const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(" ");
+                setOfficerName(fullName || profile.username);
+            })
+            .catch(() => undefined);
+        return () => { mounted = false; };
+    }, []);
+
+    const handleLogout = async () => {
+        const refresh = getSession()?.refresh;
+        if (refresh) {
+            try {
+                await api.logout(refresh);
+            } catch {
+                // Clear the local session even if the backend cannot be reached.
+            }
+        }
+        clearSession();
+        navigate("/", { replace: true });
+    };
 
     // Close sidebar when pressing Escape
     useEffect(() => {
@@ -111,10 +140,10 @@ export default function TrafficPoliceLayout({
 
                 <div className="tp-sidebar-bottom">
                     <div className="tp-officer-mini">
-                        <div className="tp-officer-avatar">PO</div>
+                        <div className="tp-officer-avatar">{officerName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</div>
 
                         <div className="tp-officer-info">
-                            <strong>Police Officer</strong>
+                            <strong>{officerName}</strong>
                             <span>Traffic Police</span>
                         </div>
                     </div>
@@ -122,6 +151,7 @@ export default function TrafficPoliceLayout({
                     <button
                         className="tp-logout-button"
                         type="button"
+                        onClick={handleLogout}
                     >
                         <LogOut size={17} />
                         <span>Logout</span>

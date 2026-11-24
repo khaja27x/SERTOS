@@ -14,6 +14,8 @@ Cleanly split across:
    - Command acknowledgement & execution reporting
 """
 
+from django.db.models import Prefetch
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -21,6 +23,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsSystemAdmin
+from apps.accounts.views import standard_response
+from apps.emergencies.permissions import IsPoliceDispatcherDashboardPermission
+from apps.emergencies.models import EmergencyIncident, IncidentStatus
 from .authentication import ESP32DeviceAuthentication
 from .models import CommandStatus, TrafficCommand, TrafficDevice, TrafficSignalState
 from .permissions import IsRegisteredESP32Device
@@ -34,7 +39,7 @@ from .serializers import (
     TrafficDeviceSerializer,
     TrafficSignalStateSerializer,
 )
-from .services import acknowledge_traffic_command, expire_stale_commands
+from .services import acknowledge_traffic_command, evaluate_and_match_traffic_signals, expire_stale_commands
 
 
 # ============================================================================
@@ -70,6 +75,87 @@ class DeviceDetailView(generics.RetrieveAPIView):
     serializer_class = TrafficDeviceSerializer
     permission_classes = [IsAuthenticated, IsSystemAdmin]
     lookup_field = "device_id"
+
+
+class PoliceTrafficOverviewView(APIView):
+    """Read-only live view of controller telemetry and corridor command status."""
+
+    permission_classes = [IsPoliceDispatcherDashboardPermission]
+
+    def get(self, request):
+        devices = TrafficDevice.objects.prefetch_related(
+            Prefetch(
+                "signal_states",
+                queryset=TrafficSignalState.objects.order_by("-reported_at"),
+                to_attr="recent_signal_states",
+            )
+        ).order_by("intersection_name", "device_id")
+
+        device_rows = []
+        for device in devices:
+            latest_state = device.recent_signal_states[0] if device.recent_signal_states else None
+            device_rows.append({
+                "id": str(device.id),
+                "device_id": device.device_id,
+                "name": device.name,
+                "intersection_name": device.intersection_name,
+                "latitude": str(device.latitude),
+                "longitude": str(device.longitude),
+                "is_active": device.is_active,
+                "last_heartbeat_at": device.last_heartbeat_at,
+                "current_signal_phase": device.current_signal_phase,
+                "firmware_version": device.firmware_version,
+                "sensor_1_detected": device.last_status_payload.get("sensor_1_detected"),
+                "sensor_2_detected": device.last_status_payload.get("sensor_2_detected"),
+                "latest_signal_state": {
+                    "current_phase": latest_state.current_phase,
+                    "is_preempted": latest_state.is_preempted,
+                    "reported_at": latest_state.reported_at,
+                } if latest_state else None,
+            })
+
+        commands = TrafficCommand.objects.select_related("device", "incident").order_by("-created_at")[:25]
+        return standard_response(
+            data={
+                "devices": device_rows,
+                "commands": TrafficCommandSerializer(commands, many=True).data,
+            },
+            message="Live traffic controller status retrieved successfully.",
+        )
+
+
+class PoliceTrafficRecheckView(APIView):
+    """Re-evaluate an in-transit ambulance's latest GPS report against controllers."""
+
+    permission_classes = [IsPoliceDispatcherDashboardPermission]
+
+    def post(self, request, incident_id):
+        incident = get_object_or_404(EmergencyIncident, pk=incident_id)
+        if incident.status != IncidentStatus.IN_TRANSIT:
+            return standard_response(
+                success=False,
+                errors={"detail": ["Corridor evaluation requires an incident marked in transit."]},
+                message="Incident is not in transit.",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        location = incident.locations.order_by("-server_received_at").first()
+        if location is None:
+            return standard_response(
+                success=False,
+                errors={"detail": ["No ambulance GPS report is available for this incident."]},
+                message="Corridor evaluation requires a current GPS report.",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        commands = evaluate_and_match_traffic_signals(incident, location)
+        return standard_response(
+            data={
+                "created_count": len(commands),
+                "commands": TrafficCommandSerializer(commands, many=True).data,
+            },
+            message="Corridor evaluation completed using the latest ambulance GPS report.",
+        )
 
 
 # ============================================================================

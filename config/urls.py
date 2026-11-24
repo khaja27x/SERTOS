@@ -19,7 +19,7 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 from config.views import HealthCheckView
-from config.views import frontend_view
+from config.views import frontend_view, static_asset_not_found
 
 urlpatterns = [
     path('health/', HealthCheckView.as_view(), name='health_root'),
@@ -32,6 +32,7 @@ urlpatterns = [
     path('api/notifications/', include('apps.emergencies.notification_urls')),
     path('api/traffic/', include('apps.traffic.urls')),
     path('api/agent/', include('apps.agent.urls')),
+    path('static/<path:path>', static_asset_not_found, name='missing_static_asset'),
     path('', frontend_view, name='frontend'),
     path('<path:path>', frontend_view, name='frontend_spa'),
 ]

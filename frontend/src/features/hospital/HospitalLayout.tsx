@@ -1,6 +1,6 @@
 
-import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { useCallback, useState } from "react";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
     HeartPulse,
     LayoutDashboard,
@@ -10,7 +10,6 @@ import {
     History,
     ChartColumnIncreasing,
     Building2,
-    Settings,
     LogOut,
     Menu,
     X,
@@ -20,6 +19,10 @@ import {
 } from "lucide-react";
 
 import "./hospital.css";
+import { api } from "../../lib/api";
+import { clearSession, getSession } from "../../lib/auth";
+import { useLiveQuery } from "../../lib/useLiveQuery";
+import type { Incident, UserProfile } from "../../lib/api";
 
 interface HospitalLayoutProps {
     children: React.ReactNode;
@@ -62,17 +65,38 @@ const navigation = [
         icon: Building2,
     },
 
-    {
-        name: "Settings",
-        path: "/hospital/settings",
-        icon: Settings,
-    },
 ];
+
+type HospitalLayoutData = { profile: UserProfile; incidents: Incident[] };
 
 export default function HospitalLayout({
     children,
 }: HospitalLayoutProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const navigate = useNavigate();
+    const loadLayoutData = useCallback(async (): Promise<HospitalLayoutData> => {
+        const [profile, incidents] = await Promise.all([api.getProfile(), api.getHospitalIncidents()]);
+        return { profile, incidents };
+    }, []);
+    const { data: layoutData, error: connectionError } = useLiveQuery(loadLayoutData, 12_000);
+    const hospitalName = layoutData?.incidents[0]?.hospital_name || "Hospital Operations";
+    const hospitalCode = layoutData?.incidents[0]?.hospital_code || "Assigned facility";
+    const staffName = layoutData?.profile.first_name || layoutData?.profile.username || "Hospital staff";
+    const pendingAlerts = layoutData?.incidents.filter((incident) => !incident.hospital_decision && !["CLOSED", "CANCELLED"].includes(incident.status)).length ?? 0;
+    const connectionLabel = connectionError ? "API unavailable" : layoutData ? "Live connection" : "Connecting…";
+
+    const handleLogout = async () => {
+        const refresh = getSession()?.refresh;
+        if (refresh) {
+            try {
+                await api.logout(refresh);
+            } catch {
+                // Clear the local session even if the backend cannot be reached.
+            }
+        }
+        clearSession();
+        navigate("/", { replace: true });
+    };
 
     return (
         <div className="hospital-app">
@@ -132,8 +156,8 @@ export default function HospitalLayout({
                                     <Icon size={20} strokeWidth={2} />
                                     <span>{item.name}</span>
 
-                                    {item.name === "Emergency Alerts" && (
-                                        <span className="hospital-alert-count">2</span>
+                                    {item.name === "Emergency Alerts" && pendingAlerts > 0 && (
+                                        <span className="hospital-alert-count">{pendingAlerts}</span>
                                     )}
                                 </NavLink>
                             );
@@ -148,16 +172,16 @@ export default function HospitalLayout({
                             <Building2 size={38} />
                         </div>
 
-                        <h3>City Care Hospital</h3>
-                        <p>Hospital ID: HSP-001</p>
+                        <h3>{hospitalName}</h3>
+                        <p>{hospitalCode}</p>
 
                         <span className="hospital-online">
                             <span />
-                            Hospital Online
+                            {connectionLabel}
                         </span>
                     </div>
 
-                    <button className="hospital-logout">
+                    <button className="hospital-logout" type="button" onClick={handleLogout}>
                         <LogOut size={19} />
                         <span>Logout</span>
                     </button>
@@ -178,33 +202,30 @@ export default function HospitalLayout({
                         <Menu size={24} />
                     </button>
 
-                    <div className="hospital-search">
+                    <button className="hospital-search" type="button" onClick={() => navigate("/hospital/alerts")}>
                         <Search size={19} />
-                        <input
-                            type="text"
-                            placeholder="Search patients, ambulances, alerts..."
-                        />
-                    </div>
+                        <span>Open incident queue</span>
+                    </button>
 
                     <div className="hospital-topbar-right">
                         <span className="hospital-status">
                             <span />
-                            Hospital Online
+                            {connectionLabel}
                         </span>
 
-                        <button className="hospital-notification-button">
+                        <button className="hospital-notification-button" type="button" aria-label="Open emergency alerts" onClick={() => navigate("/hospital/alerts")}>
                             <Bell size={21} />
-                            <span>2</span>
+                            {pendingAlerts > 0 && <span>{pendingAlerts}</span>}
                         </button>
 
-                        <button className="hospital-user">
+                        <button className="hospital-user" type="button" onClick={() => navigate("/hospital/profile")}>
                             <div className="hospital-avatar">
                                 <CircleUserRound size={22} />
                             </div>
 
                             <div className="hospital-user-details">
-                                <strong>Hospital Administrator</strong>
-                                <small>City Care Hospital</small>
+                                <strong>{staffName}</strong>
+                                <small>{hospitalName}</small>
                             </div>
 
                             <ChevronDown size={17} />

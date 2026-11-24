@@ -5,7 +5,7 @@ Production health check and readiness probe views for SERTOS backend.
 from django.conf import settings
 from django.db import connection
 from django.utils import timezone
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseNotFound
 from pathlib import Path
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -70,5 +70,13 @@ def frontend_view(request, path=""):
     return HttpResponse(
         "Frontend build is missing. Run npm run build --prefix frontend.",
         status=503,
+        content_type="text/plain",
+    )
+
+
+def static_asset_not_found(request, path=""):
+    """Do not let a missing JS/CSS/image asset fall through to the SPA shell."""
+    return HttpResponseNotFound(
+        "Static asset not found.",
         content_type="text/plain",
     )

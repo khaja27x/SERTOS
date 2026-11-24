@@ -38,7 +38,7 @@ export default function LoginPage() {
                 AMBULANCE_DRIVER: "/driver",
                 POLICE_DISPATCHER: "/police",
                 HOSPITAL_STAFF: "/hospital",
-                ADMIN: "/police",
+                ADMIN: "/admin",
             };
 
             navigate(destinations[session.user.role] ?? "/", { replace: true });

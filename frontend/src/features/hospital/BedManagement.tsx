@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
     BedDouble,
     Search,
@@ -11,8 +11,8 @@ import {
     CalendarDays,
     Plus,
 } from "lucide-react";
-import { useEffect } from "react";
 import { api, type HospitalBed } from "../../lib/api";
+import { useLiveQuery } from "../../lib/useLiveQuery";
 import "./hospital.css";
 
 type BedStatus = "Available" | "Occupied" | "Reserved";
@@ -29,26 +29,23 @@ const categories = ["All Beds", "General", "ICU", "Emergency"] as const;
 type CategoryFilter = (typeof categories)[number];
 
 function BedManagement() {
-    const [beds, setBeds] = useState<Bed[]>([]);
-    const [bedRecords, setBedRecords] = useState<HospitalBed[]>([]);
+    const loadBeds = useCallback(() => api.getHospitalBeds(), []);
+    const { data: bedRecords = [], error: loadError, lastUpdated, refresh } = useLiveQuery<HospitalBed[]>(loadBeds, 12_000);
+    const beds: Bed[] = bedRecords.map((bed) => ({
+        id: bed.bed_number,
+        category: bed.category === "GENERAL" ? "General" : bed.category === "ICU" ? "ICU" : "Emergency",
+        status: bed.status === "AVAILABLE" ? "Available" : bed.status === "OCCUPIED" ? "Occupied" : "Reserved",
+        patient: bed.patient_label || undefined,
+    }));
     const [error, setError] = useState("");
     const [category, setCategory] = useState<CategoryFilter>("All Beds");
     const [status, setStatus] = useState("All Status");
     const [search, setSearch] = useState("");
-
-    useEffect(() => {
-        api.getHospitalBeds()
-            .then((records) => {
-                setBedRecords(records);
-                setBeds(records.map((bed) => ({
-                    id: bed.bed_number,
-                    category: bed.category === "GENERAL" ? "General" : bed.category === "ICU" ? "ICU" : "Emergency",
-                    status: bed.status === "AVAILABLE" ? "Available" : bed.status === "OCCUPIED" ? "Occupied" : "Reserved",
-                    patient: bed.patient_label || undefined,
-                })));
-            })
-            .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to load beds."));
-    }, []);
+    const [showAddBed, setShowAddBed] = useState(false);
+    const [newBedNumber, setNewBedNumber] = useState("");
+    const [newBedCategory, setNewBedCategory] = useState<"GENERAL" | "ICU" | "EMERGENCY">("GENERAL");
+    const [savingBed, setSavingBed] = useState(false);
+    const [busyBed, setBusyBed] = useState("");
 
     const counts = useMemo(() => ({
         total: beds.length,
@@ -70,17 +67,56 @@ function BedManagement() {
     const reserveBed = async (bedId: string) => {
         const record = bedRecords.find((bed) => bed.bed_number === bedId);
         if (!record) return;
-        const updated = await api.updateHospitalBed(record.id, { status: "RESERVED", patient_label: "Incoming patient" });
-        setBedRecords((current) => current.map((bed) => bed.id === updated.id ? updated : bed));
-        setBeds((current) => current.map((bed) => bed.id === bedId ? { ...bed, status: "Reserved", patient: "Incoming patient" } : bed));
+        setBusyBed(bedId);
+        setError("");
+        try {
+            await api.updateHospitalBed(record.id, { status: "RESERVED" });
+            refresh();
+        } catch (reason: unknown) {
+            setError(reason instanceof Error ? reason.message : "Unable to reserve this bed.");
+        } finally {
+            setBusyBed("");
+        }
     };
 
     const releaseBed = async (bedId: string) => {
         const record = bedRecords.find((bed) => bed.bed_number === bedId);
         if (!record) return;
-        const updated = await api.updateHospitalBed(record.id, { status: "AVAILABLE", patient_label: "" });
-        setBedRecords((current) => current.map((bed) => bed.id === updated.id ? updated : bed));
-        setBeds((current) => current.map((bed) => bed.id === bedId ? { ...bed, status: "Available", patient: undefined, admittedAt: undefined } : bed));
+        setBusyBed(bedId);
+        setError("");
+        try {
+            await api.updateHospitalBed(record.id, { status: "AVAILABLE", patient_label: "" });
+            refresh();
+        } catch (reason: unknown) {
+            setError(reason instanceof Error ? reason.message : "Unable to update this bed.");
+        } finally {
+            setBusyBed("");
+        }
+    };
+
+    const addBed = async () => {
+        if (!newBedNumber.trim()) {
+            setError("Enter a bed number.");
+            return;
+        }
+        setSavingBed(true);
+        setError("");
+        try {
+            const created = await api.createHospitalBed({
+                bed_number: newBedNumber.trim(),
+                category: newBedCategory,
+                status: "AVAILABLE",
+            });
+            void created;
+            refresh();
+            setShowAddBed(false);
+            setNewBedNumber("");
+            setNewBedCategory("GENERAL");
+        } catch (reason: unknown) {
+            setError(reason instanceof Error ? reason.message : "Unable to add bed.");
+        } finally {
+            setSavingBed(false);
+        }
     };
 
     return (
@@ -94,9 +130,13 @@ function BedManagement() {
 
                 <div className="hb-heading-actions">
                     <span className="hb-updated">
-                        <Clock3 size={15} /> Live database
+                        <Clock3 size={15} /> {lastUpdated ? `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(lastUpdated)}` : "Connecting…"}
                     </span>
-                    <button className="hb-primary-button" type="button">
+                    <button
+                        className="hb-primary-button"
+                        type="button"
+                        onClick={() => setShowAddBed(true)}
+                    >
                         <Plus size={17} /> Add Bed
                     </button>
                 </div>
@@ -207,27 +247,30 @@ function BedManagement() {
                                 <button
                                     type="button"
                                     className="hb-bed-action reserve"
+                                    disabled={busyBed === bed.id}
                                     onClick={() => reserveBed(bed.id)}
                                 >
-                                    Reserve Bed
+                                    {busyBed === bed.id ? "Saving…" : "Reserve Bed"}
                                 </button>
                             )}
                             {bed.status === "Reserved" && (
                                 <button
                                     type="button"
                                     className="hb-bed-action release"
+                                    disabled={busyBed === bed.id}
                                     onClick={() => releaseBed(bed.id)}
                                 >
-                                    Release Reservation
+                                    {busyBed === bed.id ? "Saving…" : "Release Reservation"}
                                 </button>
                             )}
                             {bed.status === "Occupied" && (
                                 <button
                                     type="button"
                                     className="hb-bed-action release"
+                                    disabled={busyBed === bed.id}
                                     onClick={() => releaseBed(bed.id)}
                                 >
-                                    Mark as Available
+                                    {busyBed === bed.id ? "Saving…" : "Mark as Available"}
                                 </button>
                             )}
                         </article>
@@ -242,7 +285,47 @@ function BedManagement() {
                 </div>
             </section>
 
-            {error && <div className="hb-demo-note">{error}</div>}
+            {(loadError || error) && <div className="hb-demo-note">{error || loadError}</div>}
+            {showAddBed && (
+                <div className="hb-modal-overlay" role="presentation">
+                    <div className="hb-add-bed-modal" role="dialog" aria-modal="true" aria-labelledby="hb-add-bed-title">
+                        <button
+                            type="button"
+                            className="hb-modal-close"
+                            onClick={() => setShowAddBed(false)}
+                            aria-label="Close add bed dialog"
+                        >
+                            <XCircle size={19} />
+                        </button>
+                        <h2 id="hb-add-bed-title">Add Hospital Bed</h2>
+                        <label htmlFor="hb-bed-number">Bed number</label>
+                        <input
+                            id="hb-bed-number"
+                            value={newBedNumber}
+                            onChange={(event) => setNewBedNumber(event.target.value)}
+                            placeholder="e.g. ICU-01"
+                        />
+                        <label htmlFor="hb-bed-category">Category</label>
+                        <select
+                            id="hb-bed-category"
+                            value={newBedCategory}
+                            onChange={(event) =>
+                                setNewBedCategory(event.target.value as "GENERAL" | "ICU" | "EMERGENCY")
+                            }
+                        >
+                            <option value="GENERAL">General</option>
+                            <option value="ICU">ICU</option>
+                            <option value="EMERGENCY">Emergency</option>
+                        </select>
+                        <div className="hb-modal-actions">
+                            <button type="button" onClick={() => setShowAddBed(false)}>Cancel</button>
+                            <button type="button" disabled={savingBed} onClick={addBed}>
+                                {savingBed ? "Adding..." : "Add Bed"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

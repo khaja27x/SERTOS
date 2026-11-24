@@ -32,9 +32,12 @@ interface HomePageProps {
     gpsStatus?: string
     emergencyStatus?: string
     trafficStatus?: string
+    hasActiveIncident?: boolean
+    notificationCount?: number
 
     onStartEmergency: () => void
     onNotificationClick?: () => void
+    onTrafficClick?: () => void
 }
 
 export default function HomePage({
@@ -49,8 +52,11 @@ export default function HomePage({
     gpsStatus = 'Waiting for GPS',
     emergencyStatus = 'READY',
     trafficStatus = 'Waiting',
+    hasActiveIncident = false,
+    notificationCount = 0,
     onStartEmergency,
     onNotificationClick,
+    onTrafficClick,
 }: HomePageProps) {
 
     const [reportExpanded, setReportExpanded] = useState(false)
@@ -100,7 +106,7 @@ export default function HomePage({
                                 />
 
                                 <span className="text-[11px] text-slate-300">
-                                    {isOnDuty ? 'On Duty' : 'Off Duty'}
+                                    {isOnDuty ? 'Ready for dispatch' : 'Unavailable'}
                                 </span>
 
                             </div>
@@ -111,9 +117,10 @@ export default function HomePage({
                     <button
                         onClick={onNotificationClick}
                         aria-label="Notifications"
-                        className="w-10 h-10 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center"
+                        className="relative w-10 h-10 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center"
                     >
                         <Bell size={19} />
+                        {notificationCount > 0 && <span className="absolute -right-1 -top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-[9px] font-bold flex items-center justify-center">{notificationCount > 9 ? '9+' : notificationCount}</span>}
                     </button>
 
                 </div>
@@ -163,9 +170,9 @@ export default function HomePage({
 
                     </div>
 
-                    <div className="bg-teal-50 px-3 py-1.5 rounded-full">
-                        <span className="text-[10px] font-bold text-teal-700">
-                            ASSIGNED
+                    <div className={`${ambulanceNumber === 'Not assigned' ? 'bg-slate-100' : 'bg-teal-50'} px-3 py-1.5 rounded-full`}>
+                        <span className={`text-[10px] font-bold ${ambulanceNumber === 'Not assigned' ? 'text-slate-600' : 'text-teal-700'}`}>
+                            {ambulanceNumber === 'Not assigned' ? 'NO ASSIGNMENT' : 'ASSIGNED'}
                         </span>
                     </div>
 
@@ -196,7 +203,7 @@ export default function HomePage({
                             </p>
                         </div>
 
-                        <span className={`text-[10px] font-bold px-2.5 py-1.5 rounded-full ${emergencyStatus === 'ACTIVE'
+                        <span className={`text-[10px] font-bold px-2.5 py-1.5 rounded-full ${hasActiveIncident
                             ? 'text-red-700 bg-red-50'
                             : 'text-teal-700 bg-teal-50'
                             }`}>
@@ -207,11 +214,11 @@ export default function HomePage({
 
                     <button
                         onClick={onStartEmergency}
-                        disabled={!isOnDuty || emergencyStatus === 'ACTIVE'}
+                        disabled={!isOnDuty || hasActiveIncident}
                         className="w-full mt-4 bg-[#EF4444] hover:bg-red-600 disabled:opacity-50 text-white rounded-xl py-3.5 flex items-center justify-center gap-2 font-bold text-sm shadow-md shadow-red-500/15 active:scale-[0.98] transition-all"
                     >
                         <Siren size={18} />
-                        {emergencyStatus === 'ACTIVE'
+                        {hasActiveIncident
                             ? 'Emergency Active'
                             : 'Start Emergency'
                         }
@@ -233,9 +240,9 @@ export default function HomePage({
                     </h3>
 
                     <div className="flex items-center gap-1.5 text-teal-600">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#14B8A6]" />
+                        <span className={`w-1.5 h-1.5 rounded-full ${hasActiveIncident ? 'bg-[#14B8A6]' : 'bg-amber-400'}`} />
                         <span className="text-[10px] font-semibold">
-                            LIVE STATUS
+                            {hasActiveIncident ? 'MISSION ACTIVE' : 'AWAITING DISPATCH'}
                         </span>
                     </div>
 
@@ -325,7 +332,11 @@ export default function HomePage({
 
             {/* TRAFFIC COORDINATION */}
 
-            <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+            <button
+                type="button"
+                onClick={onTrafficClick}
+                className="w-full text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm active:scale-[0.99] transition-transform"
+            >
 
                 <div className="flex items-center gap-3">
 
@@ -350,8 +361,7 @@ export default function HomePage({
                     </span>
 
                 </div>
-
-            </section>
+            </button>
 
 
             {/* PATIENT REPORT */}

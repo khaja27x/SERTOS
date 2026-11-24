@@ -14,11 +14,15 @@ from .views import (
     DeviceSignalStateView,
     DeviceStatusView,
     PendingCommandsView,
+    PoliceTrafficOverviewView,
+    PoliceTrafficRecheckView,
 )
 
 app_name = "traffic"
 
 urlpatterns = [
+    path("police/overview/", PoliceTrafficOverviewView.as_view(), name="police-overview"),
+    path("police/incidents/<uuid:incident_id>/recheck-corridor/", PoliceTrafficRecheckView.as_view(), name="police-recheck-corridor"),
     # Administrative Endpoints (Human Administrators)
     path("devices/", DeviceListView.as_view(), name="device-list"),
     path("devices/register/", DeviceRegistrationView.as_view(), name="device-register"),

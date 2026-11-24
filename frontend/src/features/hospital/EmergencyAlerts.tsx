@@ -1,390 +1,110 @@
-
-import { useEffect, useState } from "react";
-import {
-    AlertTriangle,
-    Ambulance,
-    BedDouble,
-    CheckCircle2,
-    Clock3,
-    MapPin,
-    Phone,
-    UserRound,
-    X,
-    XCircle,
-    HeartPulse,
-    Activity,
-    ShieldAlert,
-} from "lucide-react";
-import "./hospital.css";
+import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Activity, Ambulance, AlertTriangle, BedDouble, CheckCircle2, Clock3, MapPin, RefreshCw, X, XCircle } from "lucide-react";
 import { api, type Incident } from "../../lib/api";
+import { useLiveQuery } from "../../lib/useLiveQuery";
+import "./hospital.css";
 
-type EmergencyStatus = "Awaiting Response" | "Accepted" | "Rejected";
+function formatTime(value?: string | null) {
+    if (!value) return "Not recorded";
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
 
-type EmergencyCase = {
-    id: string;
-    patientName: string;
-    patientId: string;
-    age: number;
-    gender: string;
-    condition: string;
-    severity: "Critical" | "High" | "Moderate";
-    symptoms: string[];
-    medicalSummary: string;
-    ambulanceId: string;
-    driverName: string;
-    driverPhone: string;
-    eta: string;
-    distance: string;
-    bedType: string;
-    assignedAt: string;
-    status: EmergencyStatus;
-    rejectionReason?: string;
-};
+export default function EmergencyAlerts() {
+    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const { data: incidents = [], loading, error, lastUpdated, refresh } = useLiveQuery(api.getHospitalIncidents, 8_000);
+    const [decisionOverrides, setDecisionOverrides] = useState<Record<string, "ACCEPTED" | "REJECTED">>({});
+    const [rejectingId, setRejectingId] = useState<string | null>(null);
+    const [reason, setReason] = useState("");
+    const [actionError, setActionError] = useState("");
+    const [saving, setSaving] = useState(false);
 
-function EmergencyAlerts() {
-    const [cases, setCases] = useState<EmergencyCase[]>([]);
-    const [selectedCaseId, setSelectedCaseId] = useState("");
-    const [rejectingCaseId, setRejectingCaseId] = useState<string | null>(null);
-    const [rejectionReason, setRejectionReason] = useState("");
-    const [error, setError] = useState("");
+    const selected = incidents.find((incident) => incident.id === searchParams.get("incident")) ?? incidents[0];
+    const decisionFor = (incident: Incident) => decisionOverrides[incident.id] ?? incident.hospital_decision ?? null;
+    const pendingCount = incidents.filter((incident) => !decisionFor(incident) && !["CLOSED", "CANCELLED"].includes(incident.status)).length;
+    const acceptedCount = incidents.filter((incident) => decisionFor(incident) === "ACCEPTED").length;
+    const criticalCount = incidents.filter((incident) => (incident.severity === "CRITICAL" || incident.severity === "HIGH") && !decisionFor(incident)).length;
 
-    useEffect(() => {
-        api.getHospitalIncidents()
-            .then((incidents) => {
-                const mapped = incidents.map((incident: Incident): EmergencyCase => ({
-                    id: incident.id,
-                    patientName: "Emergency patient",
-                    patientId: incident.incident_number,
-                    age: 0,
-                    gender: "Unknown",
-                    condition: incident.description || "Emergency response required",
-                    severity: incident.severity === "CRITICAL" ? "Critical" : incident.severity === "HIGH" ? "High" : "Moderate",
-                    symptoms: [incident.status_display || incident.status],
-                    medicalSummary: incident.description || "No clinical summary provided.",
-                    ambulanceId: incident.ambulance_vehicle_number || "Unassigned",
-                    driverName: "Assigned driver",
-                    driverPhone: "",
-                    eta: "Live route",
-                    distance: "Tracking available",
-                    bedType: "Hospital triage",
-                    assignedAt: incident.created_at,
-                    status: "Awaiting Response",
-                }));
-                setCases(mapped);
-                if (mapped[0]) setSelectedCaseId(mapped[0].id);
-            })
-            .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to load hospital alerts."));
-    }, []);
-
-    const selectedCase =
-        cases.find((item) => item.id === selectedCaseId) ?? cases[0];
-
-    const pendingCount = cases.filter(
-        (item) => item.status === "Awaiting Response"
-    ).length;
-
-    const acceptedCount = cases.filter(
-        (item) => item.status === "Accepted"
-    ).length;
-
-    const acceptCase = async (caseId: string) => {
-        await api.decideHospitalIncident(caseId, "ACCEPTED");
-        setCases((current) =>
-            current.map((item) =>
-                item.id === caseId
-                    ? { ...item, status: "Accepted" }
-                    : item
-            )
-        );
+    const selectIncident = (incident: Incident) => setSearchParams({ incident: incident.id });
+    const acceptCase = async (incident: Incident) => {
+        setSaving(true);
+        setActionError("");
+        try {
+            await api.decideHospitalIncident(incident.id, "ACCEPTED");
+            setDecisionOverrides((current) => ({ ...current, [incident.id]: "ACCEPTED" }));
+            refresh();
+        } catch (cause: unknown) {
+            setActionError(cause instanceof Error ? cause.message : "Unable to accept this incident.");
+        } finally {
+            setSaving(false);
+        }
     };
-
-    const rejectCase = async (caseId: string) => {
-        if (!rejectionReason.trim()) return;
-        await api.decideHospitalIncident(caseId, "REJECTED", rejectionReason);
-
-        setCases((current) =>
-            current.map((item) =>
-                item.id === caseId
-                    ? {
-                        ...item,
-                        status: "Rejected",
-                        rejectionReason: rejectionReason.trim(),
-                    }
-                    : item
-            )
-        );
-
-        setRejectingCaseId(null);
-        setRejectionReason("");
+    const rejectCase = async () => {
+        if (!rejectingId || !reason.trim()) return;
+        setSaving(true);
+        setActionError("");
+        try {
+            await api.decideHospitalIncident(rejectingId, "REJECTED", reason.trim());
+            setDecisionOverrides((current) => ({ ...current, [rejectingId]: "REJECTED" }));
+            setRejectingId(null);
+            setReason("");
+            refresh();
+        } catch (cause: unknown) {
+            setActionError(cause instanceof Error ? cause.message : "Unable to reject this incident.");
+        } finally {
+            setSaving(false);
+        }
     };
-
-    if (!selectedCase) {
-        return (
-            <div className="hd-dashboard">
-                <h1>Emergency Alerts</h1>
-                <p>{error || "No emergency cases are currently assigned to this hospital."}</p>
-            </div>
-        );
-    }
 
     return (
         <div className="hd-dashboard hea-page">
             <div className="hd-page-heading">
-                <div>
-                    <div className="hd-breadcrumb">Hospital / Emergency Alerts</div>
-                    <h1>Emergency Alerts</h1>
-                    <p>Review AI-assigned emergency cases and respond to incoming patients.</p>
-                </div>
-
-                <div className="hea-live-indicator">
-                    <span />
-                    Assigned cases only
-                </div>
+                <div><div className="hd-breadcrumb">Hospital / Emergency Alerts</div><h1>Emergency Alerts</h1><p>Review assigned incidents and record the hospital response.</p></div>
+                <div className="hea-live-indicator"><span />{lastUpdated ? `Updated ${formatTime(lastUpdated.toISOString())}` : loading ? "Connecting…" : "Live queue"}<button type="button" onClick={refresh} aria-label="Refresh incidents"><RefreshCw size={15} /></button></div>
             </div>
 
+            {error && <div className="hd-live-error" role="alert">Incident refresh failed: {error}</div>}
+            {actionError && <div className="hd-live-error" role="alert">{actionError}</div>}
             <div className="hea-summary-grid">
-                <div className="hea-summary-card">
-                    <div className="hea-summary-icon pending"><AlertTriangle size={21} /></div>
-                    <div>
-                        <span>Awaiting Response</span>
-                        <strong>{pendingCount.toString().padStart(2, "0")}</strong>
-                    </div>
-                </div>
-                <div className="hea-summary-card">
-                    <div className="hea-summary-icon accepted"><CheckCircle2 size={21} /></div>
-                    <div>
-                        <span>Accepted Cases</span>
-                        <strong>{acceptedCount.toString().padStart(2, "0")}</strong>
-                    </div>
-                </div>
-                <div className="hea-summary-card">
-                    <div className="hea-summary-icon critical"><ShieldAlert size={21} /></div>
-                    <div>
-                        <span>Critical Cases</span>
-                        <strong>
-                            {cases.filter((item) => item.severity === "Critical" && item.status === "Awaiting Response").length
-                                .toString().padStart(2, "0")}
-                        </strong>
-                    </div>
-                </div>
+                <div className="hea-summary-card"><div className="hea-summary-icon pending"><AlertTriangle size={21} /></div><div><span>Awaiting Response</span><strong>{pendingCount.toString().padStart(2, "0")}</strong></div></div>
+                <div className="hea-summary-card"><div className="hea-summary-icon accepted"><CheckCircle2 size={21} /></div><div><span>Accepted</span><strong>{acceptedCount.toString().padStart(2, "0")}</strong></div></div>
+                <div className="hea-summary-card"><div className="hea-summary-icon critical"><AlertTriangle size={21} /></div><div><span>High/Critical Pending</span><strong>{criticalCount.toString().padStart(2, "0")}</strong></div></div>
             </div>
 
             <div className="hea-layout">
                 <section className="hea-list-panel">
-                    <div className="hea-section-heading">
-                        <div>
-                            <h2>Incoming Cases</h2>
-                            <p>AI-selected for City Care Hospital</p>
-                        </div>
-                        <span className="hea-count">{cases.length} cases</span>
-                    </div>
-
+                    <div className="hea-section-heading"><div><h2>Assigned Incidents</h2><p>Refreshes automatically every 8 seconds</p></div><span className="hea-count">{incidents.length} total</span></div>
                     <div className="hea-case-list">
-                        {cases.map((item) => (
-                            <button
-                                type="button"
-                                key={item.id}
-                                className={`hea-case-item ${selectedCaseId === item.id ? "selected" : ""}`}
-                                onClick={() => setSelectedCaseId(item.id)}
-                            >
-                                <div className="hea-case-top">
-                                    <span className="hea-case-id">{item.id}</span>
-                                    <span className={`hea-severity ${item.severity.toLowerCase()}`}>
-                                        {item.severity}
-                                    </span>
-                                </div>
-                                <strong>{item.patientName}</strong>
-                                <span className="hea-condition">{item.condition}</span>
-                                <div className="hea-case-bottom">
-                                    <span><Ambulance size={14} /> {item.ambulanceId}</span>
-                                    <span><Clock3 size={14} /> ETA {item.eta}</span>
-                                </div>
-                                <div className={`hea-case-status ${item.status.toLowerCase().replaceAll(" ", "-")}`}>
-                                    {item.status}
-                                </div>
-                            </button>
-                        ))}
+                        {incidents.map((incident) => {
+                            const decision = decisionFor(incident);
+                            const responseLabel = decision === "ACCEPTED" ? "Accepted" : decision === "REJECTED" ? "Rejected" : "Awaiting Response";
+                            return <button type="button" key={incident.id} className={`hea-case-item ${selected?.id === incident.id ? "selected" : ""}`} onClick={() => selectIncident(incident)}>
+                                <div className="hea-case-top"><span className="hea-case-id">{incident.incident_number}</span><span className={`hea-severity ${(incident.severity_display || incident.severity).toLowerCase()}`}>{incident.severity_display || incident.severity}</span></div>
+                                <strong>{incident.description || "Emergency response required"}</strong>
+                                <span className="hea-condition">{incident.patient_count} patient{incident.patient_count === 1 ? "" : "s"} · {incident.hospital_name || "Assigned hospital"}</span>
+                                <div className="hea-case-bottom"><span><Ambulance size={14} /> {incident.ambulance_vehicle_number || "Ambulance unassigned"}</span><span><Clock3 size={14} /> {formatTime(incident.created_at)}</span></div>
+                                <div className={`hea-case-status ${responseLabel.toLowerCase().replaceAll(" ", "-")}`}>{responseLabel}</div>
+                            </button>;
+                        })}
+                        {!incidents.length && <div className="hd-live-empty">{loading ? "Loading assigned incidents…" : "No incidents are currently assigned to this hospital."}</div>}
                     </div>
                 </section>
 
                 <section className="hea-details-panel">
-                    <div className="hea-detail-header">
-                        <div>
-                            <span className="hea-overline">EMERGENCY CASE DETAILS</span>
-                            <h2>{selectedCase.id}</h2>
-                        </div>
-                        <span className={`hea-severity ${selectedCase.severity.toLowerCase()}`}>
-                            {selectedCase.severity} Priority
-                        </span>
-                    </div>
-
-                    <div className="hea-patient-banner">
-                        <div className="hea-patient-avatar"><UserRound size={26} /></div>
-                        <div>
-                            <h3>{selectedCase.patientName}</h3>
-                            <p>{selectedCase.patientId} · {selectedCase.age} years · {selectedCase.gender}</p>
-                        </div>
-                        <span className={`hea-case-status ${selectedCase.status.toLowerCase().replaceAll(" ", "-")}`}>
-                            {selectedCase.status}
-                        </span>
-                    </div>
-
-                    <div className="hea-condition-box">
-                        <div className="hea-condition-icon"><HeartPulse size={21} /></div>
-                        <div>
-                            <span>Reported Medical Condition</span>
-                            <strong>{selectedCase.condition}</strong>
-                        </div>
-                    </div>
-
-                    <div className="hea-detail-section">
-                        <h3><Activity size={17} /> Reported Symptoms</h3>
-                        <div className="hea-symptoms">
-                            {selectedCase.symptoms.map((symptom) => (
-                                <span key={symptom}>{symptom}</span>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="hea-detail-section">
-                        <h3>AI Clinical Summary</h3>
-                        <p className="hea-medical-summary">{selectedCase.medicalSummary}</p>
-                        <p className="hea-ai-disclaimer">
-                            AI-generated support summary. Hospital clinicians must independently assess the patient.
-                        </p>
-                    </div>
-
-                    <div className="hea-detail-section">
-                        <h3><BedDouble size={17} /> Required Hospital Resources</h3>
-                        <div className="hea-resource-row">
-                            <span>Recommended care</span>
-                            <strong>{selectedCase.bedType}</strong>
-                        </div>
-                        <div className="hea-resource-row">
-                            <span>Hospital assignment</span>
-                            <strong>City Care Hospital</strong>
-                        </div>
-                    </div>
-
-                    <div className="hea-ambulance-box">
-                        <div className="hea-ambulance-heading">
-                            <h3><Ambulance size={18} /> Assigned Ambulance</h3>
-                            <span>AI assigned</span>
-                        </div>
-                        <div className="hea-ambulance-details">
-                            <div>
-                                <span>Vehicle</span>
-                                <strong>{selectedCase.ambulanceId}</strong>
-                            </div>
-                            <div>
-                                <span>Driver</span>
-                                <strong>{selectedCase.driverName}</strong>
-                            </div>
-                            <div>
-                                <span>Distance</span>
-                                <strong>{selectedCase.distance}</strong>
-                            </div>
-                            <div>
-                                <span>Estimated arrival</span>
-                                <strong className="hea-eta">{selectedCase.eta}</strong>
-                            </div>
-                        </div>
-                        <div className="hea-location-row">
-                            <MapPin size={15} />
-                            Ambulance location and route are available in Ambulance Tracking after acceptance.
-                        </div>
-                        <a className="hea-call-driver" href={`tel:${selectedCase.driverPhone.replaceAll(" ", "")}`}>
-                            <Phone size={15} /> Contact Driver
-                        </a>
-                    </div>
-
-                    {selectedCase.rejectionReason && (
-                        <div className="hea-rejection-note">
-                            <strong>Rejection reason:</strong> {selectedCase.rejectionReason}
-                        </div>
-                    )}
-
-                    {selectedCase.status === "Awaiting Response" ? (
-                        <div className="hea-action-area">
-                            <p>Confirm that your hospital can receive this patient and arrange the required bed.</p>
-                            <div className="hea-action-buttons">
-                                <button
-                                    type="button"
-                                    className="hea-accept-button"
-                                    onClick={() => acceptCase(selectedCase.id)}
-                                >
-                                    <CheckCircle2 size={17} /> Accept & Confirm Bed
-                                </button>
-                                <button
-                                    type="button"
-                                    className="hea-reject-button"
-                                    onClick={() => {
-                                        setRejectingCaseId(selectedCase.id);
-                                        setRejectionReason("");
-                                    }}
-                                >
-                                    <XCircle size={17} /> Reject Case
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className={`hea-response-message ${selectedCase.status.toLowerCase()}`}>
-                            {selectedCase.status === "Accepted" ? (
-                                <><CheckCircle2 size={19} /> Case accepted in this prototype. Bed confirmation still needs backend integration.</>
-                            ) : (
-                                <><XCircle size={19} /> Case rejected. Hospital operations have been notified.</>
-                            )}
-                        </div>
-                    )}
+                    {selected ? <>
+                        <div className="hea-detail-header"><div><span className="hea-overline">LIVE INCIDENT DETAILS</span><h2>{selected.incident_number}</h2></div><span className={`hea-severity ${(selected.severity_display || selected.severity).toLowerCase()}`}>{selected.severity_display || selected.severity}</span></div>
+                        <div className="hea-patient-banner"><div className="hea-patient-avatar"><Ambulance size={24} /></div><div><h3>{selected.ambulance_vehicle_number || "Ambulance not assigned"}</h3><p>{selected.patient_count} patient{selected.patient_count === 1 ? "" : "s"} · Reported {formatTime(selected.created_at)}</p></div><span className={`hea-case-status ${(decisionFor(selected) || "pending").toLowerCase()}`}>{decisionFor(selected) || "Awaiting Response"}</span></div>
+                        <div className="hea-condition-box"><div className="hea-condition-icon"><Activity size={21} /></div><div><span>Reported emergency details</span><strong>{selected.description || "No additional description supplied."}</strong></div></div>
+                        <div className="hea-detail-section"><h3>Operational status</h3><div className="hea-resource-row"><span>Incident status</span><strong>{selected.status_display || selected.status}</strong></div><div className="hea-resource-row"><span>Hospital response</span><strong>{decisionFor(selected) || "Awaiting response"}</strong></div><div className="hea-resource-row"><span>Facility</span><strong>{selected.hospital_name || "Assigned hospital"}</strong></div><div className="hea-resource-row"><span>Ambulance</span><strong>{selected.ambulance_vehicle_number || "Not assigned"}</strong></div></div>
+                        <div className="hea-detail-section"><h3><BedDouble size={17} /> Bed coordination</h3><p className="hea-medical-summary">Review current capacity in Bed Management. Acceptance records the hospital decision in the incident system.</p><button type="button" className="hea-call-driver" onClick={() => navigate("/hospital/beds")}><BedDouble size={15} /> Open Bed Management</button></div>
+                        <div className="hea-detail-section"><h3><MapPin size={17} /> Incident timeline</h3><div className="hea-resource-row"><span>Reported</span><strong>{formatTime(selected.created_at)}</strong></div><div className="hea-resource-row"><span>Assigned</span><strong>{formatTime(selected.assigned_at)}</strong></div><div className="hea-resource-row"><span>In transit</span><strong>{formatTime(selected.in_transit_at)}</strong></div><div className="hea-resource-row"><span>Arrival</span><strong>{formatTime(selected.arrived_at)}</strong></div></div>
+                        {decisionFor(selected) ? <div className={`hea-response-message ${decisionFor(selected)?.toLowerCase()}`}><CheckCircle2 size={19} /> Response saved as {decisionFor(selected)}.</div> : <div className="hea-action-area"><p>Choose a response for this assigned incident.</p><div className="hea-action-buttons"><button type="button" className="hea-accept-button" disabled={saving} onClick={() => void acceptCase(selected)}><CheckCircle2 size={17} /> {saving ? "Saving…" : "Accept incident"}</button><button type="button" className="hea-reject-button" disabled={saving} onClick={() => { setRejectingId(selected.id); setReason(""); }}><XCircle size={17} /> Reject</button></div></div>}
+                    </> : <div className="hd-live-empty">{loading ? "Loading incident details…" : "Select an assigned incident to review."}</div>}
                 </section>
             </div>
 
-            {rejectingCaseId && (
-                <div className="hea-modal-overlay" role="presentation">
-                    <div className="hea-reject-modal" role="dialog" aria-modal="true" aria-labelledby="hea-reject-title">
-                        <button
-                            type="button"
-                            className="hea-modal-close"
-                            onClick={() => setRejectingCaseId(null)}
-                            aria-label="Close rejection dialog"
-                        >
-                            <X size={19} />
-                        </button>
-                        <div className="hea-modal-icon"><AlertTriangle size={23} /></div>
-                        <h2 id="hea-reject-title">Reject Emergency Case?</h2>
-                        <p>Please provide a reason so SERTOS can seek another suitable hospital.</p>
-                        <label htmlFor="hea-rejection-reason">Reason for rejection</label>
-                        <select
-                            id="hea-rejection-reason"
-                            value={rejectionReason}
-                            onChange={(event) => setRejectionReason(event.target.value)}
-                        >
-                            <option value="">Select a reason</option>
-                            <option value="No suitable bed available">No suitable bed available</option>
-                            <option value="Required specialist unavailable">Required specialist unavailable</option>
-                            <option value="Emergency department at capacity">Emergency department at capacity</option>
-                            <option value="Required medical equipment unavailable">Required medical equipment unavailable</option>
-                            <option value="Other operational reason">Other operational reason</option>
-                        </select>
-                        <div className="hea-modal-actions">
-                            <button type="button" onClick={() => setRejectingCaseId(null)}>
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!rejectionReason}
-                                onClick={() => rejectCase(rejectingCaseId)}
-                            >
-                                Confirm Rejection
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {error && <div className="hb-demo-note">{error}</div>}
+            {rejectingId && <div className="hea-modal-overlay" role="presentation"><div className="hea-reject-modal" role="dialog" aria-modal="true" aria-labelledby="hea-reject-title"><button type="button" className="hea-modal-close" onClick={() => setRejectingId(null)} aria-label="Close rejection dialog"><X size={19} /></button><div className="hea-modal-icon"><AlertTriangle size={23} /></div><h2 id="hea-reject-title">Reject incident?</h2><p>Choose a reason so dispatch can continue coordination.</p><label htmlFor="hea-rejection-reason">Reason</label><select id="hea-rejection-reason" value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Select a reason</option><option value="No suitable bed available">No suitable bed available</option><option value="Required specialist unavailable">Required specialist unavailable</option><option value="Emergency department at capacity">Emergency department at capacity</option><option value="Required medical equipment unavailable">Required medical equipment unavailable</option><option value="Other operational reason">Other operational reason</option></select><div className="hea-modal-actions"><button type="button" onClick={() => setRejectingId(null)}>Cancel</button><button type="button" disabled={!reason || saving} onClick={() => void rejectCase()}>{saving ? "Saving…" : "Confirm Rejection"}</button></div></div></div>}
         </div>
     );
 }
-
-export default EmergencyAlerts;

@@ -1,276 +1,63 @@
+import { useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Activity, Ambulance, Bell, CheckCircle2, Clock3, GitBranch, MapPin, RefreshCw, Siren, TrendingUp } from "lucide-react";
+import { api, type Incident, type Notification, type PoliceTrafficOverview } from "../../lib/api";
+import { useLiveQuery } from "../../lib/useLiveQuery";
 
-import {
-    Activity,
-    Ambulance,
-    Bell,
-    CheckCircle2,
-    Clock3,
-    MapPin,
-    Radio,
-    ShieldCheck,
-    Siren,
-    TrendingUp,
-} from "lucide-react";
-import { useEffect, useState } from "react";
-import { api, type Incident } from "../../lib/api";
+type PoliceDashboardData = { incidents: Incident[]; notifications: Notification[]; traffic: PoliceTrafficOverview };
 
-const statistics = [
-    {
-        title: "Active Ambulances",
-        value: "08",
-        detail: "Currently on emergency routes",
-        icon: Ambulance,
-        color: "blue",
-    },
-    {
-        title: "Pending Alerts",
-        value: "03",
-        detail: "Require officer attention",
-        icon: Bell,
-        color: "orange",
-    },
-    {
-        title: "Junctions Connected",
-        value: "12",
-        detail: "Connected junctions",
-        icon: Radio,
-        color: "green",
-    },
-    {
-        title: "Alerts Resolved",
-        value: "24",
-        detail: "Today’s completed alerts",
-        icon: CheckCircle2,
-        color: "purple",
-    },
-];
+function formatTime(value: string) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
 
-const recentActivity = [
-    {
-        title: "Ambulance alert received",
-        description: "AMB-1024 · Rajampet Main Road",
-        time: "2 minutes ago",
-    },
-    {
-        title: "Junction clearance acknowledged",
-        description: "Railway Station Junction",
-        time: "8 minutes ago",
-    },
-    {
-        title: "Emergency route completed",
-        description: "AMB-1015 · Hospital arrival confirmed",
-        time: "18 minutes ago",
-    },
-];
+function isRecent(value: string | null) {
+    return Boolean(value && Date.now() - Date.parse(value) < 90_000);
+}
 
 export default function PoliceDashboard() {
-    const [incidents, setIncidents] = useState<Incident[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState("");
-
-    useEffect(() => {
-        let active = true;
-        api.getPoliceIncidents()
-            .then((data) => {
-                if (active) setIncidents(data);
-            })
-            .catch((reason: unknown) => {
-                if (active) {
-                    setError(reason instanceof Error ? reason.message : "Unable to load live incidents.");
-                }
-            })
-            .finally(() => {
-                if (active) setLoading(false);
-            });
-
-        return () => {
-            active = false;
-        };
+    const navigate = useNavigate();
+    const loadDashboard = useCallback(async (): Promise<PoliceDashboardData> => {
+        const [incidents, notifications, traffic] = await Promise.all([
+            api.getPoliceIncidents(),
+            api.getNotifications().catch(() => null),
+            api.getPoliceTrafficOverview(),
+        ]);
+        return { incidents, notifications: notifications?.results ?? [], traffic };
     }, []);
-
-    const activeIncidents = incidents.filter(
-        (incident) => !["CLOSED", "CANCELLED"].includes(incident.status),
-    );
-    const liveAlerts = activeIncidents.map((incident) => ({
-        id: incident.incident_number,
-        location: incident.hospital?.address || incident.hospital?.name || "Destination pending",
-        destination: incident.hospital?.name || "Hospital pending",
-        eta: incident.status === "IN_TRANSIT" ? "Live route" : "Calculating",
-        priority: incident.severity_display || incident.severity,
-        status: incident.status_display || incident.status,
-    }));
+    const { data, loading, error, lastUpdated, refresh } = useLiveQuery(loadDashboard, 8_000);
+    const incidents = data?.incidents ?? [];
+    const activeIncidents = incidents.filter((incident) => !["CLOSED", "CANCELLED"].includes(incident.status));
+    const inTransit = activeIncidents.filter((incident) => incident.status === "IN_TRANSIT");
+    const ambulanceCount = new Set(inTransit.map((incident) => incident.ambulance_vehicle_number).filter(Boolean)).size;
+    const unacknowledged = activeIncidents.filter((incident) => !incident.police_acknowledged).length;
+    const devices = data?.traffic.devices ?? [];
+    const onlineJunctions = devices.filter((device) => device.is_active && isRecent(device.last_heartbeat_at)).length;
+    const today = new Date().toDateString();
+    const resolvedToday = incidents.filter((incident) => incident.status === "CLOSED" && incident.closed_at && new Date(incident.closed_at).toDateString() === today).length;
+    const activity = (data?.notifications ?? []).slice(0, 4);
 
     return (
         <div className="tp-dashboard">
-            {loading && (
-                <div className="tp-panel-footer">Loading live incidents...</div>
-            )}
-            {error && (
-                <div className="tp-panel-footer">{error}</div>
-            )}
-            <header className="tp-page-header">
-                <div>
-                    <div className="tp-breadcrumb">Traffic Police / Dashboard</div>
-                    <h1>Dashboard Overview</h1>
-                    <p>Monitor emergency response activities and ambulance movements.</p>
-                </div>
-
-                <div className="tp-header-actions">
-                    <div className="tp-live-indicator">
-                        <span />
-                        System Online
-                    </div>
-                    <button className="tp-icon-button" type="button" aria-label="Notifications">
-                        <Bell size={19} />
-                        <span className="tp-notification-dot" />
-                    </button>
-                    <div className="tp-header-officer">
-                        <div className="tp-officer-avatar">PO</div>
-                        <div>
-                            <strong>Police Officer</strong>
-                            <span>Traffic Control Unit</span>
-                        </div>
-                    </div>
-                </div>
-            </header>
-
-            <section className="tp-welcome-panel">
-                <div className="tp-welcome-icon">
-                    <ShieldCheck size={25} />
-                </div>
-                <div>
-                    <h2>Welcome, Traffic Officer</h2>
-                    <p>
-                        Your control center for monitoring ambulances and coordinating
-                        emergency traffic response.
-                    </p>
-                </div>
-                <div className="tp-welcome-status">
-                    <span />
-                    On Duty
-                </div>
-            </section>
+            <header className="tp-page-header"><div><div className="tp-breadcrumb">Traffic Police / Dashboard</div><h1>Operations Overview</h1><p>Live incidents, ambulance movement, and registered junction telemetry.</p></div><div className="tp-header-actions"><div className={`tp-live-indicator ${error ? "tp-api-error" : ""}`}><span />{error ? "API unavailable" : lastUpdated ? "API connected" : "Connecting"}</div><button className="tp-icon-button" type="button" onClick={refresh} aria-label="Refresh operations"><RefreshCw size={18} /></button><div className="tp-header-officer"><div className="tp-officer-avatar">TP</div><div><strong>Traffic Operations</strong><span>{lastUpdated ? `Updated ${formatTime(lastUpdated.toISOString())}` : "Awaiting backend"}</span></div></div></div></header>
+            {error && <div className="tp-panel-footer tp-api-error-message" role="alert">Live refresh failed: {error}</div>}
+            <section className="tp-welcome-panel"><div className="tp-welcome-icon"><Activity size={25} /></div><div><h2>Live response coordination</h2><p>Incident and controller status refresh automatically while this page is open.</p></div><div className="tp-welcome-status"><span />{loading && !data ? "Connecting" : "Polling"}</div></section>
 
             <section className="tp-stat-grid">
-                {statistics.map((item) => {
+                {[{ title: "Ambulances en route", value: ambulanceCount, detail: "Unique vehicles in transit", icon: Ambulance, color: "blue" }, { title: "Unacknowledged alerts", value: unacknowledged, detail: "Require officer review", icon: Bell, color: "orange" }, { title: "Reporting junctions", value: onlineJunctions, detail: `${devices.length} registered controllers`, icon: GitBranch, color: "green" }, { title: "Incidents closed today", value: resolvedToday, detail: "Based on recorded close time", icon: CheckCircle2, color: "purple" }].map((item) => {
                     const Icon = item.icon;
-
-                    return (
-                        <article className="tp-stat-card" key={item.title}>
-                            <div className={`tp-stat-icon tp-stat-${item.color}`}>
-                                <Icon size={21} />
-                            </div>
-                            <div className="tp-stat-content">
-                                <span>{item.title}</span>
-                                <strong>{item.title === "Active Ambulances" ? String(activeIncidents.length).padStart(2, "0") : item.title === "Pending Alerts" ? String(liveAlerts.length).padStart(2, "0") : item.value}</strong>
-                                <small>{item.detail}</small>
-                            </div>
-                            <TrendingUp className="tp-stat-trend" size={17} />
-                        </article>
-                    );
+                    return <article className="tp-stat-card" key={item.title}><div className={`tp-stat-icon tp-stat-${item.color}`}><Icon size={21} /></div><div className="tp-stat-content"><span>{item.title}</span><strong>{item.value.toString().padStart(2, "0")}</strong><small>{item.detail}</small></div><TrendingUp className="tp-stat-trend" size={17} /></article>;
                 })}
             </section>
 
             <section className="tp-dashboard-grid">
-                <article className="tp-card tp-alerts-panel">
-                    <div className="tp-section-header">
-                        <div>
-                            <h2>
-                                <Siren size={19} />
-                                Active Ambulance Alerts
-                            </h2>
-                            <p>Emergency vehicles currently requiring coordination</p>
-                        </div>
-                        <span className="tp-count-badge">{String(activeIncidents.length).padStart(2, "0")} Active</span>
-                    </div>
-
-                    <div className="tp-alert-list">
-                        {liveAlerts.map((alert) => (
-                            <div className="tp-alert-row" key={alert.id}>
-                                <div className="tp-alert-symbol">
-                                    <Ambulance size={21} />
-                                </div>
-
-                                <div className="tp-alert-main">
-                                    <div className="tp-alert-title">
-                                        <strong>{alert.id}</strong>
-                                        <span
-                                            className={
-                                                alert.priority === "Critical"
-                                                    ? "tp-priority-critical"
-                                                    : "tp-priority-high"
-                                            }
-                                        >
-                                            {alert.priority}
-                                        </span>
-                                    </div>
-                                    <p>
-                                        <MapPin size={13} />
-                                        {alert.location}
-                                    </p>
-                                    <small>Destination: {alert.destination}</small>
-                                </div>
-
-                                <div className="tp-alert-meta">
-                                    <strong>
-                                        <Clock3 size={14} />
-                                        {alert.eta}
-                                    </strong>
-                                    <span>{alert.status}</span>
-                                    <button type="button" className="tp-view-button">
-                                        View details
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className="tp-panel-footer">
-                        <span>Showing 3 of 8 active ambulances</span>
-                        <button type="button">View all alerts →</button>
-                    </div>
+                <article className="tp-card tp-alerts-panel"><div className="tp-section-header"><div><h2><Siren size={19} />Active Incidents</h2><p>Dispatch and acknowledgement status from the API</p></div><span className="tp-count-badge">{activeIncidents.length} Active</span></div>
+                    <div className="tp-alert-list">{activeIncidents.slice(0, 6).map((incident) => <div className="tp-alert-row" key={incident.id}><div className="tp-alert-symbol"><Ambulance size={21} /></div><div className="tp-alert-main"><div className="tp-alert-title"><strong>{incident.incident_number}</strong><span className={incident.severity === "CRITICAL" ? "tp-priority-critical" : "tp-priority-high"}>{incident.severity_display || incident.severity}</span></div><p><MapPin size={13} />{incident.hospital_name || "Destination pending"}</p><small>{incident.ambulance_vehicle_number || "Ambulance unassigned"} · {incident.status_display || incident.status}</small></div><div className="tp-alert-meta"><strong><Clock3 size={14} />{incident.police_acknowledged ? "Acknowledged" : "Needs review"}</strong><button type="button" className="tp-view-button" onClick={() => navigate(`/police/alerts?incident=${encodeURIComponent(incident.id)}`)}>View details</button></div></div>)}{!activeIncidents.length && <div className="tp-empty-state">{loading ? "Loading incidents…" : "No active incidents are in the dispatch queue."}</div>}</div>
+                    <div className="tp-panel-footer"><span>Showing {Math.min(activeIncidents.length, 6)} of {activeIncidents.length} active incidents</span><button type="button" onClick={() => navigate("/police/alerts")}>Open alerts →</button></div>
                 </article>
 
-                <article className="tp-card tp-activity-panel">
-                    <div className="tp-section-header">
-                        <div>
-                            <h2>
-                                <Activity size={19} />
-                                Recent Activity
-                            </h2>
-                            <p>Latest emergency response updates</p>
-                        </div>
-                    </div>
-
-                    <div className="tp-activity-list">
-                        {recentActivity.map((activity, index) => (
-                            <div className="tp-activity-item" key={activity.title}>
-                                <div className="tp-activity-marker">
-                                    <span />
-                                    {index !== recentActivity.length - 1 && (
-                                        <div className="tp-activity-line" />
-                                    )}
-                                </div>
-                                <div className="tp-activity-content">
-                                    <strong>{activity.title}</strong>
-                                    <p>{activity.description}</p>
-                                    <small>{activity.time}</small>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className="tp-panel-footer">
-                        <span>Recent system events</span>
-                        <button type="button">View history →</button>
-                    </div>
-                </article>
+                <article className="tp-card tp-activity-panel"><div className="tp-section-header"><div><h2><Activity size={19} />Recent Notifications</h2><p>Events delivered to this officer account</p></div></div><div className="tp-activity-list">{activity.map((item, index) => <div className="tp-activity-item" key={item.id}><div className="tp-activity-marker"><span />{index !== activity.length - 1 && <div className="tp-activity-line" />}</div><div className="tp-activity-content"><strong>{item.title}</strong><p>{item.message}</p><small>{formatTime(item.created_at)}</small></div></div>)}{!activity.length && <div className="tp-empty-state">{loading ? "Loading notifications…" : "No recent notifications."}</div>}</div><div className="tp-panel-footer"><span>Controller requests: {data?.traffic.commands.length ?? 0}</span><button type="button" onClick={() => navigate("/police/junctions")}>View junctions →</button></div></article>
             </section>
-
-            <footer className="tp-dashboard-footer">
-                <span>SERTOS Emergency Response System</span>
-                <span>Traffic Police Control Center</span>
-            </footer>
+            <footer className="tp-dashboard-footer"><span>SERTOS Emergency Response System</span><span>Data refreshes every 8 seconds</span></footer>
         </div>
     );
 }

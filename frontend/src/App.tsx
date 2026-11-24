@@ -13,13 +13,20 @@ import TrafficPoliceLayout from "./features/police/TrafficPoliceLayout";
 import PoliceDashboard from "./features/police/PoliceDashboard";
 import AmbulanceAlerts from "./features/police/AmbulanceAlerts";
 import PoliceTracking from "./features/police/PoliceTracking";
+import PoliceJunctions from "./features/police/PoliceJunctions";
 import HospitalLayout from "./features/hospital/HospitalLayout";
 import HospitalDashboard from "./features/hospital/HospitalDashboard";
 import BedManagement from "./features/hospital/BedManagement";
 import EmergencyAlerts from "./features/hospital/EmergencyAlerts";
+import HospitalTracking from "./features/hospital/HospitalTracking";
+import HospitalReports from "./features/hospital/HospitalReports";
 import ConfirmationPage from "./features/driver/ConfirmationPage";
+import AdminDashboard from "./features/admin/AdminDashboard";
+import TrafficDeviceManagement from "./features/admin/TrafficDeviceManagement";
+import IncidentHistory from "./features/shared/IncidentHistory";
+import ProfilePage from "./features/shared/ProfilePage";
 import { getSession } from "./lib/auth";
-type UserRole = "driver" | "traffic_police" | "hospital";
+type UserRole = "driver" | "traffic_police" | "hospital" | "admin";
 
 // Temporary route wrapper
 function ProtectedRoute({
@@ -34,6 +41,7 @@ function ProtectedRoute({
     driver: "AMBULANCE_DRIVER",
     traffic_police: "POLICE_DISPATCHER",
     hospital: "HOSPITAL_STAFF",
+    admin: "ADMIN",
   };
 
   if (!session) {
@@ -52,6 +60,23 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LoginPage />} />
+
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute role="admin">
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/traffic-devices"
+          element={
+            <ProtectedRoute role="admin">
+              <TrafficDeviceManagement />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/driver"
@@ -101,6 +126,36 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/police/junctions"
+          element={
+            <ProtectedRoute role="traffic_police">
+              <TrafficPoliceLayout>
+                <PoliceJunctions />
+              </TrafficPoliceLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/police/history"
+          element={
+            <ProtectedRoute role="traffic_police">
+              <TrafficPoliceLayout>
+                <IncidentHistory role="police" />
+              </TrafficPoliceLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/police/profile"
+          element={
+            <ProtectedRoute role="traffic_police">
+              <TrafficPoliceLayout>
+                <ProfilePage />
+              </TrafficPoliceLayout>
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/hospital"
@@ -130,6 +185,54 @@ function App() {
               <HospitalLayout>
                 <EmergencyAlerts />
               </HospitalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hospital/tracking"
+          element={
+            <ProtectedRoute role="hospital">
+              <HospitalLayout>
+                <HospitalTracking />
+              </HospitalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hospital/history"
+          element={
+            <ProtectedRoute role="hospital">
+              <HospitalLayout>
+                <IncidentHistory role="hospital" />
+              </HospitalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hospital/reports"
+          element={
+            <ProtectedRoute role="hospital">
+              <HospitalLayout>
+                <HospitalReports />
+              </HospitalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hospital/profile"
+          element={
+            <ProtectedRoute role="hospital">
+              <HospitalLayout>
+                <ProfilePage />
+              </HospitalLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hospital/settings"
+          element={
+            <ProtectedRoute role="hospital">
+              <Navigate to="/hospital/profile" replace />
             </ProtectedRoute>
           }
         />

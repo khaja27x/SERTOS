@@ -14,11 +14,14 @@ import {
     X,
     Pencil,
     Phone,
+    LogOut,
 } from 'lucide-react'
 import HomePage from './HomePage'
 import RoutePage from './RoutePage'
+import DriverNotifications from './DriverNotifications'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { api, type Incident } from '../../lib/api'
+import { clearSession, getSession } from '../../lib/auth'
 // ==============================
 // TYPES
 // ==============================
@@ -67,7 +70,7 @@ const DEFAULT_PROFILE: DriverProfile = {
     name: 'Ambulance Driver',
     phone: '',
     age: '',
-    ambulanceNumber: 'AMB-001',
+    ambulanceNumber: 'Not assigned',
     photo: '',
 }
 
@@ -87,6 +90,8 @@ function DriverPage() {
     const [showDetails, setShowDetails] = useState(false)
     const [voiceMessage, setVoiceMessage] = useState('')
     const [activeIncident, setActiveIncident] = useState<Incident | null>(null)
+    const [lastGpsUpdate, setLastGpsUpdate] = useState<string | null>(null)
+    const [notificationsOpen, setNotificationsOpen] = useState(false)
     const manualStopRef = useRef(false)
     const patientReportRef = useRef('')
     const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
@@ -107,11 +112,45 @@ function DriverPage() {
         DEFAULT_PROFILE
     )
 
+    useEffect(() => {
+        let active = true
+        api.getProfile()
+            .then((profile) => {
+                if (!active) return
+                setDriverProfile((current) => ({
+                    name: profile.first_name || profile.username || current.name,
+                    phone: profile.phone_number || current.phone,
+                    age: profile.age ? String(profile.age) : current.age,
+                    ambulanceNumber: profile.badge_or_employee_id || current.ambulanceNumber,
+                    photo: current.photo,
+                }))
+            })
+            .catch((reason: unknown) => {
+                console.error('Unable to load driver profile:', reason)
+            })
+        return () => {
+            active = false
+        }
+    }, [])
+
     const [editProfile, setEditProfile] = useState(false)
 
     // Camera
     const [cameraOpen, setCameraOpen] = useState(false)
     const [cameraError, setCameraError] = useState('')
+
+    const handleLogout = async () => {
+        const refresh = getSession()?.refresh
+        if (refresh) {
+            try {
+                await api.logout(refresh)
+            } catch {
+                // Clear the local session even if the backend cannot be reached.
+            }
+        }
+        clearSession()
+        navigate('/', { replace: true })
+    }
 
     const videoRef = useRef<HTMLVideoElement | null>(null)
     const cameraStreamRef = useRef<MediaStream | null>(null)
@@ -218,12 +257,38 @@ function DriverPage() {
     }, [location.key, location.state, navigate])
 
     useEffect(() => {
-        api.getDriverIncidents()
-            .then((incidents) => {
-                const current = incidents.find((incident) => !['CLOSED', 'CANCELLED'].includes(incident.status))
-                if (current) setActiveIncident(current)
-            })
-            .catch((reason: unknown) => console.error('Unable to load driver incidents:', reason))
+        let mounted = true
+        let refreshing = false
+        const refreshOperations = async () => {
+            if (refreshing) return
+            refreshing = true
+            try {
+                const incidents = await api.getDriverIncidents()
+                if (!mounted) return
+                const current = incidents.find((incident) => !['CLOSED', 'CANCELLED'].includes(incident.status)) ?? null
+                setActiveIncident(current)
+                if (current) {
+                    try {
+                        const location = await api.getLocation(current.id)
+                        if (mounted) setLastGpsUpdate(location?.recorded_at ?? null)
+                    } catch {
+                        if (mounted) setLastGpsUpdate(null)
+                    }
+                } else {
+                    setLastGpsUpdate(null)
+                }
+            } catch (reason: unknown) {
+                if (mounted) setVoiceMessage(reason instanceof Error ? reason.message : 'Unable to refresh live incident data.')
+            } finally {
+                refreshing = false
+            }
+        }
+        void refreshOperations()
+        const interval = window.setInterval(() => void refreshOperations(), 10_000)
+        return () => {
+            mounted = false
+            window.clearInterval(interval)
+        }
     }, [])
     const capturePhoto = () => {
         const video = videoRef.current
@@ -314,7 +379,7 @@ function DriverPage() {
         }))
     }
 
-    const saveDriverProfile = () => {
+    const saveDriverProfile = async () => {
 
         if (!draftProfile.name.trim()) {
             setVoiceMessage('Please enter driver name.')
@@ -344,20 +409,22 @@ function DriverPage() {
         }
 
         try {
-            localStorage.setItem(
-                STORAGE_KEY,
-                JSON.stringify(draftProfile)
-            )
-
+            await api.updateProfile({
+                first_name: draftProfile.name,
+                age,
+                phone_number: draftProfile.phone,
+                badge_or_employee_id: draftProfile.ambulanceNumber,
+            })
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(draftProfile))
             setDriverProfile({ ...draftProfile })
             setEditProfile(false)
-
             setVoiceMessage('Driver profile saved successfully.')
-
         } catch (error) {
             console.error('Profile storage error:', error)
             setVoiceMessage(
-                'Unable to save profile. Browser storage may be full.'
+                error instanceof Error
+                    ? error.message
+                    : 'Unable to save driver profile.'
             )
         }
     }
@@ -507,30 +574,35 @@ function DriverPage() {
     // HOME PAGE
     // ==============================
 
-    const renderHome = () => (
-        <HomePage
+    const renderHome = () => {
+        const gpsAgeMs = lastGpsUpdate ? Date.now() - Date.parse(lastGpsUpdate) : Number.POSITIVE_INFINITY
+        const gpsStatus = !activeIncident
+            ? 'No active incident'
+            : !lastGpsUpdate
+                ? 'Waiting for first GPS report'
+                : gpsAgeMs < 90_000
+                    ? 'GPS reporting'
+                    : `Last report ${new Date(lastGpsUpdate).toLocaleTimeString()}`
+
+        return <HomePage
             driverName={driverProfile.name}
             driverPhoto={driverProfile.photo}
             ambulanceNumber={driverProfile.ambulanceNumber}
             isOnDuty={true}
+            hasActiveIncident={Boolean(activeIncident)}
             patientReport={patientReport}
             showDetails={showDetails}
             onTogglePatientReport={() => setShowDetails(prev => !prev)}
             hospitalETA="-- min"
-            destination={activeIncident?.hospital_name || 'Not selected'}
-            gpsStatus="Waiting for GPS"
+            destination={activeIncident?.hospital_name || activeIncident?.hospital?.name || 'No destination assigned'}
+            gpsStatus={gpsStatus}
             emergencyStatus={activeIncident?.status_display || activeIncident?.status || 'READY'}
-            trafficStatus="Waiting"
-            onStartEmergency={() => {
-                setVoiceMessage(
-                    'Please record the patient report and confirm the emergency first'
-                )
-            }}
-            onNotificationClick={() => {
-                setVoiceMessage('Notifications will be connected later.')
-            }}
+            trafficStatus={activeIncident?.police_acknowledged ? 'Police acknowledged' : activeIncident ? 'Awaiting coordination' : 'No active incident'}
+            onTrafficClick={() => setActiveTab('route')}
+            onStartEmergency={() => setVoiceMessage('Record the patient report, then confirm the emergency to send it to dispatch.')}
+            onNotificationClick={() => setNotificationsOpen(true)}
         />
-    )
+    }
 
     // ==============================
     // ROUTE PAGE
@@ -573,13 +645,23 @@ function DriverPage() {
                 </div>
 
                 {!editProfile ? (
-                    <button
-                        onClick={openEditProfile}
-                        className="flex items-center gap-1.5 bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-xs font-bold"
-                    >
-                        <Pencil size={14} />
-                        Edit
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={openEditProfile}
+                            className="flex items-center gap-1.5 bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-xs font-bold"
+                        >
+                            <Pencil size={14} />
+                            Edit
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleLogout}
+                            className="flex items-center gap-1.5 bg-slate-100 text-slate-700 px-3 py-2.5 rounded-xl text-xs font-bold"
+                        >
+                            <LogOut size={14} />
+                            Logout
+                        </button>
+                    </div>
                 ) : (
                     <button
                         onClick={cancelEditProfile}
@@ -861,6 +943,8 @@ function DriverPage() {
                     </div>
                 )}
             </main>
+
+            {notificationsOpen && <DriverNotifications onClose={() => setNotificationsOpen(false)} />}
 
             {/* LIVE CAMERA MODAL */}
 
